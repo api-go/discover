@@ -380,15 +380,28 @@ var numberMatcher = regexp.MustCompile(`^\d+(s|ms|us|µs|ns?)?$`)
 func (d *Discoverer) addApp(app, callConf string, fetch bool) bool {
 	d.appLock.Lock()
 	conf := d.GetConfig()
-	if conf.Calls == nil {
-		conf.Calls = make(map[string]string)
+
+	// 1. 写时复制（Copy-on-Write）：创建一个全新的 Map 避免影响读操作
+	newCalls := make(map[string]string)
+	for k, v := range conf.Calls {
+		newCalls[k] = v
 	}
-	if conf.Calls[app] == callConf && d.appNodes[app] != nil {
+
+	if newCalls[app] == callConf && d.appNodes[app] != nil {
 		d.appLock.Unlock()
 		return false
 	}
-	conf.Calls[app] = callConf
+
+	newCalls[app] = callConf
+	conf.Calls = newCalls // 将新的 Map 赋值给 ConfigStruct
+
+	// 2. 更新实例配置
 	d.SetConfig(conf)
+
+	// 3. 如果是默认的全局实例，保持包级全局配置同步
+	if d == DefaultDiscoverer {
+		SetConfig(conf)
+	}
 
 	callInfo := &callInfoType{
 		Timeout:     10 * time.Second,
