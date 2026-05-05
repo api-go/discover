@@ -22,20 +22,17 @@ type LoadBalancer interface {
 // DefaultLoadBalancer 默认负载均衡器（简单权重轮询/得分最小者优先）
 type DefaultLoadBalancer struct{}
 
+// Response 在默认负载均衡器中不再执行写操作，减少锁竞争
 func (lb *DefaultLoadBalancer) Response(appClient *AppClient, node *NodeInfo, err error, response *http.Response, responseTime time.Duration) {
-	node.Data.Store("score", float64(node.UsedTimes)/float64(node.Weight))
 }
 
+// Next 根据得分（UsedTimes / Weight）选择得分最小的节点
 func (lb *DefaultLoadBalancer) Next(appClient *AppClient, nodes []*NodeInfo, request *http.Request) *NodeInfo {
 	var minScore float64 = -1
 	var minNode *NodeInfo
 	for _, node := range nodes {
-		scoreValue, ok := node.Data.Load("score")
-		if !ok {
-			scoreValue = float64(node.UsedTimes) / float64(node.Weight)
-			node.Data.Store("score", scoreValue)
-		}
-		score := scoreValue.(float64)
+		// 动态计算得分，避免使用 sync.Map 存储，减少内存分配和锁竞争
+		score := float64(node.UsedTimes.Load()) / float64(node.Weight)
 		if minNode == nil || score < minScore {
 			minScore = score
 			minNode = node

@@ -47,21 +47,28 @@ type callInfoType struct {
 	SSL         bool
 }
 
+// IsServer 返回当前节点是否作为服务端运行
 func IsServer() bool { return isServer }
+
+// IsClient 返回当前节点是否作为客户端运行
 func IsClient() bool { return isClient }
 
-func logError(error string, extra ...any) {
-	_logger.Error("Discover: "+error, append(extra, "app", Config.App, "addr", myAddr)...)
+// logError 记录 Discover 内部错误
+func logError(msg string, extra ...any) {
+	_logger.Error("Discover: "+msg, append(extra, "app", Config.App, "addr", myAddr)...)
 }
 
-func logInfo(info string, extra ...any) {
-	_logger.Info("Discover: "+info, append(extra, "app", Config.App, "addr", myAddr)...)
+// logInfo 记录 Discover 内部信息
+func logInfo(msg string, extra ...any) {
+	_logger.Info("Discover: "+msg, append(extra, "app", Config.App, "addr", myAddr)...)
 }
 
+// SetLogger 设置 Discover 使用的全局 Logger
 func SetLogger(logger *log.Logger) {
 	_logger = logger
 }
 
+// Init 初始化 Discover 配置，通常由 Start 自动调用
 func Init() {
 	appLock.Lock()
 	defer appLock.Unlock()
@@ -84,6 +91,7 @@ func Init() {
 	_logger = log.New(id.MakeID(12))
 }
 
+// Start 启动服务发现，指定当前节点的外部访问地址
 func Start(addr string) bool {
 	Init()
 	myAddr = addr
@@ -122,7 +130,8 @@ func Start(addr string) bool {
 
 func daemon() {
 	logInfo("daemon thread started")
-	ticker := time.NewTicker(time.Second)
+	// 每 5 秒心跳一次，降低 Redis 压力，TTL 保持 10 秒
+	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
 	for daemonRunning {
@@ -191,6 +200,7 @@ func subscribeAppUnderLock(app string) {
 	})
 }
 
+// Stop 停止 Discover 并从注册中心注销当前节点
 func Stop() {
 	appLock.Lock()
 	if isClient && pubsubRedisPool != nil {
@@ -210,6 +220,7 @@ func Stop() {
 	appLock.Unlock()
 }
 
+// Wait 等待守护进程退出
 func Wait() {
 	if daemonStopChan != nil {
 		<-daemonStopChan
@@ -217,6 +228,8 @@ func Wait() {
 	}
 }
 
+// EasyStart 自动根据环境变量和本地网卡信息启动 Discover
+// 返回监听的 IP 和 端口
 func EasyStart() (string, int) {
 	Init()
 	port := 0
@@ -272,6 +285,7 @@ func EasyStart() (string, int) {
 	return ip.String(), port
 }
 
+// AddExternalApp 动态添加需要发现的外部应用
 func AddExternalApp(app, callConf string) bool {
 	if addApp(app, callConf, true) {
 		if !isClient {
@@ -286,6 +300,7 @@ func AddExternalApp(app, callConf string) bool {
 	return false
 }
 
+// SetNode 手动设置某个服务的节点信息（不通过注册中心）
 func SetNode(app, addr string, weight int) {
 	pushNode(app, addr, weight)
 }
@@ -407,6 +422,7 @@ func getCalls() map[string]string {
 	return calls
 }
 
+// GetAppNodes 获取某个应用的所有节点列表
 func GetAppNodes(app string) map[string]*NodeInfo {
 	return getAppNodes(app)
 }
@@ -428,7 +444,9 @@ func pushNode(app, addr string, weight int) {
 
 	if node, ok := _appNodes[app][addr]; ok {
 		if node.Weight != weight {
-			node.UsedTimes = uint64(float64(node.UsedTimes) / float64(node.Weight) * float64(weight))
+			// 调整 UsedTimes 保持相对均衡，使用 Load() 和 Store()
+			used := node.UsedTimes.Load()
+			node.UsedTimes.Store(uint64(float64(used) / float64(node.Weight) * float64(weight)))
 			node.Weight = weight
 		}
 	} else {
@@ -436,14 +454,15 @@ func pushNode(app, addr string, weight int) {
 		if len(_appNodes[app]) > 0 {
 			var totalScore float64
 			for _, n := range _appNodes[app] {
-				totalScore += float64(n.UsedTimes) / float64(n.Weight)
+				totalScore += float64(n.UsedTimes.Load()) / float64(n.Weight)
 			}
 			avgUsed = uint64(totalScore / float64(len(_appNodes[app])) * float64(weight))
 		}
-		_appNodes[app][addr] = &NodeInfo{
-			Addr:      addr,
-			Weight:    weight,
-			UsedTimes: avgUsed,
+		node := &NodeInfo{
+			Addr:   addr,
+			Weight: weight,
 		}
+		node.UsedTimes.Store(avgUsed)
+		_appNodes[app][addr] = node
 	}
 }

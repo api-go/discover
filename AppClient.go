@@ -8,27 +8,30 @@ import (
 
 // AppClient 用于管理单个请求的重试和负载均衡状态
 type AppClient struct {
-	excludes map[string]bool
-	tryTimes int
-	Logger   *log.Logger
-	App      string
-	Method   string
-	Path     string
-	Data     *map[string]any
-	Headers  *map[string]string
+	excludes map[string]bool // 本次请求已排除的节点
+	attempts int             // 本次请求的重试次数
+	Logger   *log.Logger     // 用于日志记录的 Logger
+	App      string          // 目标应用名称
+	Method   string          // 请求方法
+	Path     string          // 请求路径
+	Data     map[string]any  // 请求数据
+	Headers  map[string]string // 请求头
 }
 
-func (ac *AppClient) logError(error string, extra ...any) {
+// logError 记录 Discover 客户端错误
+func (ac *AppClient) logError(msg string, extra ...any) {
 	if ac.Logger == nil {
 		ac.Logger = log.DefaultLogger
 	}
-	ac.Logger.Error("Discover Client: "+error, extra...)
+	ac.Logger.Error("Discover Client: "+msg, extra...)
 }
 
+// Next 获取下一个可用节点
 func (ac *AppClient) Next(app string, request *http.Request) *NodeInfo {
 	return ac.NextWithNode(app, "", request)
 }
 
+// CheckApp 检查并尝试添加应用
 func (ac *AppClient) CheckApp(app string) bool {
 	nodes := getAppNodes(app)
 	if nodes == nil {
@@ -40,6 +43,7 @@ func (ac *AppClient) CheckApp(app string) bool {
 	return true
 }
 
+// NextWithNode 获取下一个可用节点，支持指定节点
 func (ac *AppClient) NextWithNode(app, withNode string, request *http.Request) *NodeInfo {
 	if ac.excludes == nil {
 		ac.excludes = make(map[string]bool)
@@ -51,15 +55,15 @@ func (ac *AppClient) NextWithNode(app, withNode string, request *http.Request) *
 		return nil
 	}
 
-	ac.tryTimes++
+	ac.attempts++
 	if withNode != "" {
 		ac.excludes[withNode] = true
 		return allNodes[withNode]
 	}
 
-	readyNodes := make([]*NodeInfo, 0)
+	readyNodes := make([]*NodeInfo, 0, len(allNodes))
 	for _, node := range allNodes {
-		if ac.excludes[node.Addr] || node.FailedTimes >= Config.CallRetryTimes {
+		if ac.excludes[node.Addr] || node.FailedTimes.Load() >= int32(Config.CallRetryTimes) {
 			continue
 		}
 		readyNodes = append(readyNodes, node)
@@ -83,7 +87,7 @@ func (ac *AppClient) NextWithNode(app, withNode string, request *http.Request) *
 	}
 
 	if node == nil {
-		ac.logError("no available node", "app", app, "tryTimes", ac.tryTimes)
+		ac.logError("no available node", "app", app, "attempts", ac.attempts)
 	}
 
 	return node

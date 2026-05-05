@@ -7,7 +7,7 @@ require (
 	apigo.cc/go/config v1.0.4
 	apigo.cc/go/http v1.0.3
 	apigo.cc/go/id v1.0.4
-	apigo.cc/go/log v1.0.2
+	apigo.cc/go/log v1.1.0
 	apigo.cc/go/redis v1.0.2
 	github.com/gorilla/websocket v1.5.3
 )

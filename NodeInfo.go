@@ -2,13 +2,14 @@ package discover
 
 import (
 	"sync"
+	"sync/atomic"
 )
 
 // NodeInfo 存储服务节点信息
 type NodeInfo struct {
-	Addr        string   // 节点地址
-	Weight      int      // 节点权重
-	UsedTimes   uint64   // 已使用次数
-	FailedTimes int      // 失败次数
-	Data        sync.Map // 运行时自定义数据
+	Addr        string        // 节点地址
+	Weight      int           // 节点权重
+	UsedTimes   atomic.Uint64 // 已使用次数
+	FailedTimes atomic.Int32  // 失败次数
+	Data        sync.Map      // 运行时自定义数据
 }

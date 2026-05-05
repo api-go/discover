@@ -138,3 +138,24 @@ func TestEasyStart(t *testing.T) {
 	fmt.Printf("EasyStart: %s:%d\n", ip, port)
 	discover.Stop()
 }
+
+func BenchmarkDiscover(b *testing.B) {
+	discover.Config.App = "bench-app"
+	discover.SetNode("bench-app", "127.0.0.1:8080", 100)
+	discover.SetNode("bench-app", "127.0.0.1:8081", 100)
+	
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		// 模拟一个不需要实际网络请求的调用过程，只测试 Discover 内部逻辑（负载均衡、节点选择等）
+		// 我们通过 Mock 或直接调用内部方法来实现
+		appClient := discover.AppClient{
+			App:    "bench-app",
+			Method: "GET",
+			Path:   "/",
+		}
+		node := appClient.Next("bench-app", nil)
+		if node == nil {
+			b.Fatal("no node")
+		}
+	}
+}

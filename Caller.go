@@ -41,48 +41,58 @@ func getHttpClient(app string, timeout time.Duration, h2c bool) *gohttp.Client {
 	return c
 }
 
+// Caller 用于发起服务间调用
 type Caller struct {
-	Request *http.Request
-	NoBody  bool
-	logger  *log.Logger
+	Request *http.Request // 原始请求，用于透传 Header
+	NoBody  bool          // 是否不发送请求体
+	logger  *log.Logger   // 用于日志记录的 Logger
 }
 
+// NewCaller 创建一个新的调用器
 func NewCaller(request *http.Request, logger *log.Logger) *Caller {
 	return &Caller{Request: request, logger: logger}
 }
 
-func (c *Caller) logError(error string, extra ...any) {
+// logError 记录 Discover 调用器错误
+func (c *Caller) logError(msg string, extra ...any) {
 	if c.logger == nil {
 		c.logger = log.DefaultLogger
 	}
-	c.logger.Error("Discover Caller: "+error, extra...)
+	c.logger.Error("Discover Caller: "+msg, extra...)
 }
 
+// Get 发起 GET 请求
 func (c *Caller) Get(app, path string, headers ...string) *gohttp.Result {
 	return c.Do("GET", app, path, nil, headers...)
 }
 
+// Post 发起 POST 请求
 func (c *Caller) Post(app, path string, data any, headers ...string) *gohttp.Result {
 	return c.Do("POST", app, path, data, headers...)
 }
 
+// Put 发起 PUT 请求
 func (c *Caller) Put(app, path string, data any, headers ...string) *gohttp.Result {
 	return c.Do("PUT", app, path, data, headers...)
 }
 
+// Delete 发起 DELETE 请求
 func (c *Caller) Delete(app, path string, data any, headers ...string) *gohttp.Result {
 	return c.Do("DELETE", app, path, data, headers...)
 }
 
+// Head 发起 HEAD 请求
 func (c *Caller) Head(app, path string, headers ...string) *gohttp.Result {
 	return c.Do("HEAD", app, path, nil, headers...)
 }
 
+// Do 发起通用请求
 func (c *Caller) Do(method, app, path string, data any, headers ...string) *gohttp.Result {
 	r, _ := c.DoWithNode(method, app, "", path, data, headers...)
 	return r
 }
 
+// Open 发起 WebSocket 连接
 func (c *Caller) Open(app, path string, headers ...string) *websocket.Conn {
 	r, _ := c.doWithNode(false, "WS", app, "", path, nil, headers...)
 	if v, ok := r.(*websocket.Conn); ok {
@@ -91,6 +101,7 @@ func (c *Caller) Open(app, path string, headers ...string) *websocket.Conn {
 	return nil
 }
 
+// DoWithNode 发起请求并返回结果及节点地址
 func (c *Caller) DoWithNode(method, app, withNode, path string, data any, headers ...string) (*gohttp.Result, string) {
 	r, nodeAddr := c.doWithNode(false, method, app, withNode, path, data, headers...)
 	if v, ok := r.(*gohttp.Result); ok {
@@ -99,6 +110,7 @@ func (c *Caller) DoWithNode(method, app, withNode, path string, data any, header
 	return nil, nodeAddr
 }
 
+// ManualDoWithNode 发起请求（手动处理响应）并返回结果及节点地址
 func (c *Caller) ManualDoWithNode(method, app, withNode, path string, data any, headers ...string) (*gohttp.Result, string) {
 	r, nodeAddr := c.doWithNode(true, method, app, withNode, path, data, headers...)
 	if v, ok := r.(*gohttp.Result); ok {
@@ -107,7 +119,7 @@ func (c *Caller) ManualDoWithNode(method, app, withNode, path string, data any, 
 	return nil, nodeAddr
 }
 
-func (c *Caller) doWithNode(manualDo bool, method, app, withNode, path string, data any, headers ...string) (any, string) {
+func (c *Caller) doWithNode(manual bool, method, app, withNode, path string, data any, headers ...string) (any, string) {
 	callerHeaders := make(map[string]string)
 	for i := 1; i < len(headers); i += 2 {
 		callerHeaders[headers[i-1]] = headers[i]
@@ -131,8 +143,8 @@ func (c *Caller) doWithNode(manualDo bool, method, app, withNode, path string, d
 		App:     app,
 		Method:  method,
 		Path:    path,
-		Data:    &callData,
-		Headers: &callerHeaders,
+		Data:    callData,
+		Headers: callerHeaders,
 	}
 
 	if settedRoute != nil {
@@ -162,7 +174,7 @@ func (c *Caller) doWithNode(manualDo bool, method, app, withNode, path string, d
 			break
 		}
 
-		node.UsedTimes++
+		node.UsedTimes.Add(1)
 		startTime := time.Now()
 		scheme := "http"
 		if callInfo != nil && callInfo.SSL {
@@ -194,13 +206,13 @@ func (c *Caller) doWithNode(manualDo bool, method, app, withNode, path string, d
 			res = &gohttp.Result{Error: err, Response: resp}
 		} else {
 			if c.Request != nil {
-				if manualDo {
+				if manual {
 					res = hc.ManualDoByRequest(c.Request, method, url, data, settedHeaders...)
 				} else {
 					res = hc.DoByRequest(c.Request, method, url, data, settedHeaders...)
 				}
 			} else {
-				if manualDo {
+				if manual {
 					res = hc.ManualDo(method, url, data, settedHeaders...)
 				} else {
 					res = hc.Do(method, url, data, settedHeaders...)
@@ -209,10 +221,11 @@ func (c *Caller) doWithNode(manualDo bool, method, app, withNode, path string, d
 		}
 
 		responseTime := time.Since(startTime)
+		usedTimeMs := float32(responseTime.Nanoseconds()) / 1e6
 		settedLoadBalancer.Response(&appClient, node, res.Error, res.Response, responseTime)
 
 		if res.Error != nil || (res.Response != nil && res.Response.StatusCode >= 502 && res.Response.StatusCode <= 504) {
-			node.FailedTimes++
+			node.FailedTimes.Add(1)
 			errStr := ""
 			if res.Error != nil {
 				errStr = res.Error.Error()
@@ -220,18 +233,19 @@ func (c *Caller) doWithNode(manualDo bool, method, app, withNode, path string, d
 				errStr = res.Response.Status
 			}
 
-			c.logError(errStr, "app", app, "node", node.Addr, "path", path, "tryTimes", appClient.tryTimes)
+			c.logError(errStr, "app", app, "node", node.Addr, "path", path, "attempts", appClient.attempts)
+			appClient.Log(node.Addr, usedTimeMs, fmt.Errorf("%s", errStr))
 
-			if node.FailedTimes >= Config.CallRetryTimes {
-				logError("node removed due to high failures", "app", app, "node", node.Addr)
-				if clientRedisPool != nil {
-					clientRedisPool.Do("HDEL", app, node.Addr)
-					clientRedisPool.PUBLISH("CH_"+app, fmt.Sprintf("%s 0", node.Addr))
-				}
+			// 仅做本地隔离，不再篡改全局注册中心状态
+			if node.FailedTimes.Load() >= int32(Config.CallRetryTimes) {
+				logError("node isolated locally due to high failures", "app", app, "node", node.Addr)
 			}
 			continue
 		}
 
+		// 请求成功，重置失败计数
+		node.FailedTimes.Store(0)
+		appClient.Log(node.Addr, usedTimeMs, nil)
 		if strings.ToUpper(method) == "WS" {
 			return wsConn, node.Addr
 		}
