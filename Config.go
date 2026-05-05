@@ -1,5 +1,9 @@
 package discover
 
+import (
+	"sync"
+)
+
 // ConfigStruct 存储发现服务的配置
 type ConfigStruct struct {
 	Registry       string            // 注册中心地址，如 redis://:@127.0.0.1:6379/15
@@ -14,4 +18,20 @@ type ConfigStruct struct {
 var Config = ConfigStruct{
 	Weight:         100,
 	CallRetryTimes: 10,
+}
+
+var configLock sync.RWMutex
+
+// SetConfig 安全地设置全局配置
+func SetConfig(conf ConfigStruct) {
+	configLock.Lock()
+	defer configLock.Unlock()
+	Config = conf
+}
+
+// GetConfig 安全地获取全局配置
+func GetConfig() ConfigStruct {
+	configLock.RLock()
+	defer configLock.RUnlock()
+	return Config
 }

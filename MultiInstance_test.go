@@ -30,8 +30,10 @@ func TestMultipleDiscoverer(t *testing.T) {
 
 	// 实例 1
 	d1 := discover.NewDiscoverer()
-	d1.Config.App = "app1"
-	d1.Config.Registry = registry
+	c1conf := d1.GetConfig()
+	c1conf.App = "app1"
+	c1conf.Registry = registry
+	d1.SetConfig(c1conf)
 	if !d1.Start("127.0.0.1:18011") {
 		t.Skip("redis not available")
 	}
@@ -39,8 +41,10 @@ func TestMultipleDiscoverer(t *testing.T) {
 
 	// 实例 2
 	d2 := discover.NewDiscoverer()
-	d2.Config.App = "app2"
-	d2.Config.Registry = registry
+	c2conf := d2.GetConfig()
+	c2conf.App = "app2"
+	c2conf.Registry = registry
+	d2.SetConfig(c2conf)
 	if !d2.Start("127.0.0.1:18012") {
 		t.Skip("redis not available")
 	}

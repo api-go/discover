@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"reflect"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -14,20 +13,17 @@ import (
 	"apigo.cc/go/log"
 )
 
-var appClientPools = make(map[string]*gohttp.Client)
-var appClientPoolsLock sync.RWMutex
-
-func getHttpClient(app string, timeout time.Duration, h2c bool) *gohttp.Client {
-	appClientPoolsLock.RLock()
-	c := appClientPools[app]
-	appClientPoolsLock.RUnlock()
+func (d *Discoverer) getHttpClient(app string, timeout time.Duration, h2c bool) *gohttp.Client {
+	d.appClientPoolsLock.RLock()
+	c := d.appClientPools[app]
+	d.appClientPoolsLock.RUnlock()
 	if c != nil {
 		return c
 	}
 
-	appClientPoolsLock.Lock()
-	defer appClientPoolsLock.Unlock()
-	c = appClientPools[app]
+	d.appClientPoolsLock.Lock()
+	defer d.appClientPoolsLock.Unlock()
+	c = d.appClientPools[app]
 	if c != nil {
 		return c
 	}
@@ -37,7 +33,7 @@ func getHttpClient(app string, timeout time.Duration, h2c bool) *gohttp.Client {
 	} else {
 		c = gohttp.NewClient(timeout)
 	}
-	appClientPools[app] = c
+	d.appClientPools[app] = c
 	return c
 }
 
@@ -131,8 +127,9 @@ func (c *Caller) doWithNode(manual bool, method, app, withNode, path string, dat
 		callerHeaders[headers[i-1]] = headers[i]
 	}
 
+	conf := c.discoverer.GetConfig()
 	if c.discoverer.isServer {
-		callerHeaders[HeaderFromApp] = c.discoverer.Config.App
+		callerHeaders[HeaderFromApp] = conf.App
 		callerHeaders[HeaderFromNode] = c.discoverer.myAddr
 	}
 
@@ -188,7 +185,7 @@ func (c *Caller) doWithNode(manual bool, method, app, withNode, path string, dat
 			scheme = "https"
 		}
 
-		hc := getHttpClient(app, callInfo.Timeout, callInfo.HttpVersion == 2 && !callInfo.SSL)
+		hc := c.discoverer.getHttpClient(app, callInfo.Timeout, callInfo.HttpVersion == 2 && !callInfo.SSL)
 		hc.NoBody = c.NoBody
 
 		var res *gohttp.Result
@@ -243,7 +240,7 @@ func (c *Caller) doWithNode(manual bool, method, app, withNode, path string, dat
 			c.logError(errStr, "app", app, "node", node.Addr, "path", path, "attempts", appClient.attempts)
 			appClient.Log(node.Addr, usedTimeMs, fmt.Errorf("%s", errStr))
 
-			if node.FailedTimes.Load() >= int32(c.discoverer.Config.CallRetryTimes) {
+			if node.FailedTimes.Load() >= int32(conf.CallRetryTimes) {
 				c.discoverer.logError("node isolated locally due to high failures", "app", app, "node", node.Addr)
 			}
 			continue

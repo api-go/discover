@@ -36,8 +36,9 @@ func (ac *AppClient) Next(app string, request *http.Request) *NodeInfo {
 func (ac *AppClient) CheckApp(app string) bool {
 	nodes := ac.discoverer.GetAppNodes(app)
 	if nodes == nil {
+		conf := ac.discoverer.GetConfig()
 		if !ac.discoverer.AddExternalApp(app, "") {
-			ac.logError("app not found", "app", app, "calls", ac.discoverer.Config.Calls)
+			ac.logError("app not found", "app", app, "calls", conf.Calls)
 			return false
 		}
 	}
@@ -62,9 +63,10 @@ func (ac *AppClient) NextWithNode(app, withNode string, request *http.Request) *
 		return allNodes[withNode]
 	}
 
+	conf := ac.discoverer.GetConfig()
 	readyNodes := make([]*NodeInfo, 0, len(allNodes))
 	for _, node := range allNodes {
-		if ac.excludes[node.Addr] || node.FailedTimes.Load() >= int32(ac.discoverer.Config.CallRetryTimes) {
+		if ac.excludes[node.Addr] || node.FailedTimes.Load() >= int32(conf.CallRetryTimes) {
 			continue
 		}
 		readyNodes = append(readyNodes, node)
