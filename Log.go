@@ -8,13 +8,17 @@ const LogTypeDiscover = "discover"
 
 type DiscoverLog struct {
 	log.BaseLog
-	App      string
-	Method   string
-	Path     string
-	Node     string
-	Attempts int
-	UsedTime float32
-	Error    string
+	App      string  `log:"pos:9,color:cyan"`
+	Method   string  `log:"pos:10,color:magenta"`
+	Path     string  `log:"pos:11,color:blue"`
+	Node     string  `log:"pos:12,color:yellow"`
+	Attempts int     `log:"pos:13"`
+	UsedTime float32 `log:"pos:14,format:%.2fms"`
+	Error    string  `log:"pos:15,color:red"`
+}
+
+func init() {
+	log.RegisterType(LogTypeDiscover, DiscoverLog{})
 }
 
 func (ac *AppClient) Log(node string, usedTime float32, err error) {
