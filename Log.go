@@ -26,7 +26,7 @@ func (ac *AppClient) Log(node string, usedTime float32, err error) {
 	}
 
 	entry := log.GetEntry[DiscoverLog]()
-	// 框架会自动调用 FillBase，不再手动调用
+	// 框架会自动调用 fillBase，只需填充业务字段
 	entry.App = ac.App
 	entry.Method = ac.Method
 	entry.Path = ac.Path

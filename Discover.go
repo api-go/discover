@@ -31,13 +31,13 @@ type Discoverer struct {
 	pubsubRedisPool *redis.Redis
 	isServer        bool
 	isClient        bool
-	daemonRunning   atomic.Bool
-	myAddr          string
-	logger          *log.Logger
-	inited          bool
-
-	daemonStopChan chan bool
-	appLock        sync.RWMutex
+	daemonRunning      atomic.Bool
+	myAddr             string
+	logger             *log.Logger
+	inited             bool
+	daemonStopSignal   chan struct{}
+	daemonDoneSignal   chan struct{}
+	appLock            sync.RWMutex
 	calls          map[string]*callInfoType
 	appNodes       map[string]map[string]*NodeInfo
 	appSubscribed  map[string]bool
@@ -72,6 +72,8 @@ func NewDiscoverer() *Discoverer {
 		appSubscribed:      make(map[string]bool),
 		appClientPools:     make(map[string]*gohttp.Client),
 		settedLoadBalancer: &DefaultLoadBalancer{},
+		daemonStopSignal:   make(chan struct{}),
+		daemonDoneSignal:   make(chan struct{}),
 	}
 }
 
@@ -162,7 +164,8 @@ func (d *Discoverer) Start(addr string) bool {
 			d.logInfo("registered")
 			d.serverRedisPool.PUBLISH("CH_"+conf.App, fmt.Sprintf("%s %d", addr, conf.Weight))
 			d.daemonRunning.Store(true)
-			d.daemonStopChan = make(chan bool)
+			d.daemonStopSignal = make(chan struct{})
+			d.daemonDoneSignal = make(chan struct{})
 			go d.daemon()
 		} else {
 			d.logError("register failed")
@@ -187,28 +190,31 @@ func (d *Discoverer) daemon() {
 	defer ticker.Stop()
 
 	for d.daemonRunning.Load() {
-		<-ticker.C
-		if !d.daemonRunning.Load() {
-			break
-		}
-
-		conf := d.GetConfig()
-		if d.isServer && d.serverRedisPool != nil {
-			if !d.serverRedisPool.Do("HEXISTS", conf.App, d.myAddr).Bool() {
-				d.logInfo("lost app registered info, re-registering")
-				if d.serverRedisPool.Do("HSET", conf.App, d.myAddr, conf.Weight).Error == nil {
-					d.serverRedisPool.Do("SETEX", conf.App+"_"+d.myAddr, 10, "1")
-					d.serverRedisPool.PUBLISH("CH_"+conf.App, fmt.Sprintf("%s %d", d.myAddr, conf.Weight))
-				}
-			} else {
-				d.serverRedisPool.Do("SETEX", conf.App+"_"+d.myAddr, 10, "1")
+		select {
+		case <-ticker.C:
+			if !d.daemonRunning.Load() {
+				break
 			}
+
+			conf := d.GetConfig()
+			if d.isServer && d.serverRedisPool != nil {
+				if !d.serverRedisPool.Do("HEXISTS", conf.App, d.myAddr).Bool() {
+					d.logInfo("lost app registered info, re-registering")
+					if d.serverRedisPool.Do("HSET", conf.App, d.myAddr, conf.Weight).Error == nil {
+						d.serverRedisPool.Do("SETEX", conf.App+"_"+d.myAddr, 10, "1")
+						d.serverRedisPool.PUBLISH("CH_"+conf.App, fmt.Sprintf("%s %d", d.myAddr, conf.Weight))
+					}
+				} else {
+					d.serverRedisPool.Do("SETEX", conf.App+"_"+d.myAddr, 10, "1")
+				}
+			}
+		case <-d.daemonStopSignal:
+			goto done
 		}
 	}
+done:
 	d.logInfo("daemon thread stopped")
-	if d.daemonStopChan != nil {
-		d.daemonStopChan <- true
-	}
+	close(d.daemonDoneSignal)
 }
 
 func (d *Discoverer) startSub() bool {
@@ -226,7 +232,7 @@ func (d *Discoverer) startSub() bool {
 		d.pubsubRedisPool = redis.GetRedis(conf.Registry, d.logger.New(id.MakeID(12)))
 		// 订阅所有已注册的应用
 		for app := range d.appSubscribed {
-			d.subscribeAppUnderLock(app)
+			d.subscribeApp(app)
 		}
 		// 必须在释放锁之前完成配置，但在释放锁之后启动，避免死锁
 		d.appLock.Unlock()
@@ -239,7 +245,7 @@ func (d *Discoverer) startSub() bool {
 	return true
 }
 
-func (d *Discoverer) subscribeAppUnderLock(app string) {
+func (d *Discoverer) subscribeApp(app string) {
 	d.pubsubRedisPool.Subscribe("CH_"+app, func() {
 		d.fetchApp(app)
 	}, func(data []byte) {
@@ -257,24 +263,40 @@ func (d *Discoverer) subscribeAppUnderLock(app string) {
 // Stop 停止 Discover 并从注册中心注销当前节点
 func (d *Discoverer) Stop() {
 	d.appLock.Lock()
-	if d.isClient && d.pubsubRedisPool != nil {
-		d.pubsubRedisPool.Stop()
-		d.isClient = false
-	}
 
-	conf := d.GetConfig()
-	if d.isServer {
+	// 1. 提取需要的状态，提前修改标志位
+	isClient := d.isClient
+	pubsub := d.pubsubRedisPool
+	d.isClient = false
+
+	isServer := d.isServer
+	serverPool := d.serverRedisPool
+	myAddr := d.myAddr
+
+	if isServer {
 		d.daemonRunning.Store(false)
-		if d.serverRedisPool != nil {
-			d.serverRedisPool.Do("HDEL", conf.App, d.myAddr)
-			d.serverRedisPool.Do("DEL", conf.App+"_"+d.myAddr)
-			d.serverRedisPool.PUBLISH("CH_"+conf.App, fmt.Sprintf("%s %d", d.myAddr, 0))
+		if d.daemonStopSignal != nil {
+			close(d.daemonStopSignal)
 		}
 		d.isServer = false
 	}
+
+	// 核心修复：在这里尽早释放锁！避免与 pushNode 回调发生死锁
 	d.appLock.Unlock()
 
-	// 释放 HTTP 连接池
+	// 2. 在无锁状态下进行耗时的网络和停止操作
+	if isClient && pubsub != nil {
+		pubsub.Stop()
+	}
+
+	if isServer && serverPool != nil {
+		conf := d.GetConfig()
+		serverPool.Do("HDEL", conf.App, myAddr)
+		serverPool.Do("DEL", conf.App+"_"+myAddr)
+		serverPool.PUBLISH("CH_"+conf.App, fmt.Sprintf("%s %d", myAddr, 0))
+	}
+
+	// 3. 释放 HTTP 连接池
 	d.appClientPoolsLock.Lock()
 	for _, client := range d.appClientPools {
 		client.Destroy()
@@ -285,9 +307,8 @@ func (d *Discoverer) Stop() {
 
 // Wait 等待守护进程退出
 func (d *Discoverer) Wait() {
-	if d.daemonStopChan != nil {
-		<-d.daemonStopChan
-		d.daemonStopChan = nil
+	if d.daemonDoneSignal != nil {
+		<-d.daemonDoneSignal
 	}
 }
 
@@ -354,11 +375,9 @@ func (d *Discoverer) AddExternalApp(app, callConf string) bool {
 		if !d.isClient {
 			d.startSub()
 		} else {
-			d.appLock.Lock()
-			d.subscribeAppUnderLock(app)
-			d.appLock.Unlock()
-			d.fetchApp(app) // 同步拉取一次
+			d.subscribeApp(app)
 		}
+		d.fetchApp(app) // 同步拉取一次
 		return true
 	}
 	return false

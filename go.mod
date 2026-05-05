@@ -4,11 +4,11 @@ go 1.25.0
 
 require (
 	apigo.cc/go/cast v1.2.6
-	apigo.cc/go/config v1.0.4
+	apigo.cc/go/config v1.0.5
 	apigo.cc/go/http v1.0.3
 	apigo.cc/go/id v1.0.4
-	apigo.cc/go/log v1.1.0
-	apigo.cc/go/redis v1.0.2
+	apigo.cc/go/log v1.1.1
+	apigo.cc/go/redis v1.0.3
 	github.com/gorilla/websocket v1.5.3
 )
 
@@ -21,6 +21,7 @@ require (
 	apigo.cc/go/safe v1.0.4 // indirect
 	apigo.cc/go/shell v1.0.4 // indirect
 	github.com/gomodule/redigo v1.9.3 // indirect
+	github.com/kr/text v0.2.0 // indirect
 	golang.org/x/crypto v0.50.0 // indirect
 	golang.org/x/net v0.53.0 // indirect
 	golang.org/x/sys v0.43.0 // indirect

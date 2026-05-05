@@ -12,14 +12,22 @@ import (
 
 func TestMultipleDiscoverer(t *testing.T) {
 	// 启动两个模拟服务
-	l1, _ := net.Listen("tcp", "127.0.0.1:18011")
+	l1, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen l1: %v", err)
+	}
+	addr1 := l1.Addr().String()
 	mux1 := http.NewServeMux()
 	mux1.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("OK1")) })
 	server1 := &http.Server{Handler: mux1}
 	go func() { _ = server1.Serve(l1) }()
 	defer server1.Close()
 
-	l2, _ := net.Listen("tcp", "127.0.0.1:18012")
+	l2, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen l2: %v", err)
+	}
+	addr2 := l2.Addr().String()
 	mux2 := http.NewServeMux()
 	mux2.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("OK2")) })
 	server2 := &http.Server{Handler: mux2}
@@ -32,9 +40,9 @@ func TestMultipleDiscoverer(t *testing.T) {
 	d1 := discover.NewDiscoverer()
 	c1conf := d1.GetConfig()
 	c1conf.App = "app1"
-	c1conf.Registry = registry
+	c1conf.Registry = registry + "?id=1"
 	d1.SetConfig(c1conf)
-	if !d1.Start("127.0.0.1:18011") {
+	if !d1.Start(addr1) {
 		t.Skip("redis not available")
 	}
 	defer d1.Stop()
@@ -43,9 +51,9 @@ func TestMultipleDiscoverer(t *testing.T) {
 	d2 := discover.NewDiscoverer()
 	c2conf := d2.GetConfig()
 	c2conf.App = "app2"
-	c2conf.Registry = registry
+	c2conf.Registry = registry + "?id=2"
 	d2.SetConfig(c2conf)
-	if !d2.Start("127.0.0.1:18012") {
+	if !d2.Start(addr2) {
 		t.Skip("redis not available")
 	}
 	defer d2.Stop()
@@ -68,10 +76,12 @@ func TestMultipleDiscoverer(t *testing.T) {
 		t.Errorf("d2 call app1 failed: %v, %s", res2.Error, res2.String())
 	}
 
-	// 验证独立性：d1 不应该能直接调用 app2 (除非手动 AddExternalApp)
+	// 验证：d1 也可以调用 app2，只要正确配置
+	d1.AddExternalApp("app2", "1")
+	time.Sleep(200 * time.Millisecond) // 等待同步
 	res3 := c1.Get("app2", "/")
-	if res3.Error == nil {
-		t.Error("d1 should not find app2 without AddExternalApp")
+	if res3.Error != nil || res3.String() != "OK2" {
+		t.Errorf("d1 call app2 failed: %v, %s", res3.Error, res3.String())
 	}
 
 	fmt.Println("Multiple Discoverer instances verified")

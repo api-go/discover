@@ -29,6 +29,9 @@ func (ac *AppClient) logError(msg string, extra ...any) {
 
 // Next 获取下一个可用节点
 func (ac *AppClient) Next(app string, request *http.Request) *NodeInfo {
+	if ac.discoverer == nil {
+		ac.discoverer = DefaultDiscoverer
+	}
 	return ac.NextWithNode(app, "", request)
 }
 
