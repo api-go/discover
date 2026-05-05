@@ -46,8 +46,8 @@ func TestDiscover(t *testing.T) {
 	defer server.Close()
 
 	// 配置 Discover
-	discover.Config.App = "test-app"
-	discover.Config.Registry = "redis://127.0.0.1:6379/15"
+	discover.DefaultDiscoverer.Config.App = "test-app"
+	discover.DefaultDiscoverer.Config.Registry = "redis://127.0.0.1:6379/15"
 	
 	// 启动 Discover
 	if !discover.Start("127.0.0.1:18001") {

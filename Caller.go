@@ -43,14 +43,20 @@ func getHttpClient(app string, timeout time.Duration, h2c bool) *gohttp.Client {
 
 // Caller 用于发起服务间调用
 type Caller struct {
-	Request *http.Request // 原始请求，用于透传 Header
-	NoBody  bool          // 是否不发送请求体
-	logger  *log.Logger   // 用于日志记录的 Logger
+	discoverer *Discoverer
+	Request    *http.Request // 原始请求，用于透传 Header
+	NoBody     bool          // 是否不发送请求体
+	logger     *log.Logger   // 用于日志记录的 Logger
 }
 
 // NewCaller 创建一个新的调用器
 func NewCaller(request *http.Request, logger *log.Logger) *Caller {
-	return &Caller{Request: request, logger: logger}
+	return DefaultDiscoverer.NewCaller(request, logger)
+}
+
+// NewCaller 创建一个新的调用器实例
+func (d *Discoverer) NewCaller(request *http.Request, logger *log.Logger) *Caller {
+	return &Caller{discoverer: d, Request: request, logger: logger}
 }
 
 // logError 记录 Discover 调用器错误
@@ -125,9 +131,9 @@ func (c *Caller) doWithNode(manual bool, method, app, withNode, path string, dat
 		callerHeaders[headers[i-1]] = headers[i]
 	}
 
-	if isServer {
-		callerHeaders[HeaderFromApp] = Config.App
-		callerHeaders[HeaderFromNode] = myAddr
+	if c.discoverer.isServer {
+		callerHeaders[HeaderFromApp] = c.discoverer.Config.App
+		callerHeaders[HeaderFromNode] = c.discoverer.myAddr
 	}
 
 	callData := make(map[string]any)
@@ -139,16 +145,17 @@ func (c *Caller) doWithNode(manual bool, method, app, withNode, path string, dat
 	}
 
 	appClient := AppClient{
-		Logger:  c.logger,
-		App:     app,
-		Method:  method,
-		Path:    path,
-		Data:    callData,
-		Headers: callerHeaders,
+		discoverer: c.discoverer,
+		Logger:     c.logger,
+		App:        app,
+		Method:     method,
+		Path:       path,
+		Data:       callData,
+		Headers:    callerHeaders,
 	}
 
-	if settedRoute != nil {
-		settedRoute(&appClient, c.Request)
+	if c.discoverer.settedRoute != nil {
+		c.discoverer.settedRoute(&appClient, c.Request)
 		app = appClient.App
 		method = appClient.Method
 		path = appClient.Path
@@ -158,7 +165,7 @@ func (c *Caller) doWithNode(manual bool, method, app, withNode, path string, dat
 		return &gohttp.Result{Error: fmt.Errorf("app %s not found", app)}, ""
 	}
 
-	callInfo := getCallInfo(app)
+	callInfo := c.discoverer.getCallInfo(app)
 	if callInfo != nil && callInfo.Token != "" {
 		callerHeaders["Access-Token"] = callInfo.Token
 	}
@@ -222,7 +229,7 @@ func (c *Caller) doWithNode(manual bool, method, app, withNode, path string, dat
 
 		responseTime := time.Since(startTime)
 		usedTimeMs := float32(responseTime.Nanoseconds()) / 1e6
-		settedLoadBalancer.Response(&appClient, node, res.Error, res.Response, responseTime)
+		c.discoverer.settedLoadBalancer.Response(&appClient, node, res.Error, res.Response, responseTime)
 
 		if res.Error != nil || (res.Response != nil && res.Response.StatusCode >= 502 && res.Response.StatusCode <= 504) {
 			node.FailedTimes.Add(1)
@@ -236,14 +243,12 @@ func (c *Caller) doWithNode(manual bool, method, app, withNode, path string, dat
 			c.logError(errStr, "app", app, "node", node.Addr, "path", path, "attempts", appClient.attempts)
 			appClient.Log(node.Addr, usedTimeMs, fmt.Errorf("%s", errStr))
 
-			// 仅做本地隔离，不再篡改全局注册中心状态
-			if node.FailedTimes.Load() >= int32(Config.CallRetryTimes) {
-				logError("node isolated locally due to high failures", "app", app, "node", node.Addr)
+			if node.FailedTimes.Load() >= int32(c.discoverer.Config.CallRetryTimes) {
+				c.discoverer.logError("node isolated locally due to high failures", "app", app, "node", node.Addr)
 			}
 			continue
 		}
 
-		// 请求成功，重置失败计数
 		node.FailedTimes.Store(0)
 		appClient.Log(node.Addr, usedTimeMs, nil)
 		if strings.ToUpper(method) == "WS" {

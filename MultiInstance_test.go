@@ -1,0 +1,74 @@
+package discover_test
+
+import (
+	"fmt"
+	"net"
+	"net/http"
+	"testing"
+	"time"
+
+	"apigo.cc/go/discover"
+)
+
+func TestMultipleDiscoverer(t *testing.T) {
+	// 启动两个模拟服务
+	l1, _ := net.Listen("tcp", "127.0.0.1:18011")
+	mux1 := http.NewServeMux()
+	mux1.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("OK1")) })
+	server1 := &http.Server{Handler: mux1}
+	go func() { _ = server1.Serve(l1) }()
+	defer server1.Close()
+
+	l2, _ := net.Listen("tcp", "127.0.0.1:18012")
+	mux2 := http.NewServeMux()
+	mux2.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("OK2")) })
+	server2 := &http.Server{Handler: mux2}
+	go func() { _ = server2.Serve(l2) }()
+	defer server2.Close()
+
+	registry := "redis://127.0.0.1:6379/15"
+
+	// 实例 1
+	d1 := discover.NewDiscoverer()
+	d1.Config.App = "app1"
+	d1.Config.Registry = registry
+	if !d1.Start("127.0.0.1:18011") {
+		t.Skip("redis not available")
+	}
+	defer d1.Stop()
+
+	// 实例 2
+	d2 := discover.NewDiscoverer()
+	d2.Config.App = "app2"
+	d2.Config.Registry = registry
+	if !d2.Start("127.0.0.1:18012") {
+		t.Skip("redis not available")
+	}
+	defer d2.Stop()
+
+	// 实例 1 发现并调用自己
+	d1.AddExternalApp("app1", "1")
+	time.Sleep(200 * time.Millisecond) // 等待同步
+	c1 := d1.NewCaller(nil, nil)
+	res1 := c1.Get("app1", "/")
+	if res1.Error != nil || res1.String() != "OK1" {
+		t.Errorf("d1 call app1 failed: %v, %s", res1.Error, res1.String())
+	}
+
+	// 实例 2 发现并调用 实例 1
+	d2.AddExternalApp("app1", "1")
+	time.Sleep(200 * time.Millisecond) // 等待同步
+	c2 := d2.NewCaller(nil, nil)
+	res2 := c2.Get("app1", "/")
+	if res2.Error != nil || res2.String() != "OK1" {
+		t.Errorf("d2 call app1 failed: %v, %s", res2.Error, res2.String())
+	}
+
+	// 验证独立性：d1 不应该能直接调用 app2 (除非手动 AddExternalApp)
+	res3 := c1.Get("app2", "/")
+	if res3.Error == nil {
+		t.Error("d1 should not find app2 without AddExternalApp")
+	}
+
+	fmt.Println("Multiple Discoverer instances verified")
+}

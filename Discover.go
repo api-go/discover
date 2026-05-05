@@ -19,26 +19,29 @@ import (
 	"apigo.cc/go/redis"
 )
 
-var (
+// Discoverer 发现服务实例
+type Discoverer struct {
+	Config ConfigStruct
+
 	serverRedisPool *redis.Redis
 	clientRedisPool *redis.Redis
 	pubsubRedisPool *redis.Redis
-	isServer        = false
-	isClient        = false
-	daemonRunning   = false
-	myAddr          = ""
-	_logger         = log.DefaultLogger
-	_inited         = false
+	isServer        bool
+	isClient        bool
+	daemonRunning   bool
+	myAddr          string
+	logger          *log.Logger
+	inited          bool
 
 	daemonStopChan chan bool
 	appLock        sync.RWMutex
-	_calls         = map[string]*callInfoType{}
-	_appNodes      = map[string]map[string]*NodeInfo{}
-	appSubscribed  = map[string]bool{}
+	calls          map[string]*callInfoType
+	appNodes       map[string]map[string]*NodeInfo
+	appSubscribed  map[string]bool
 
-	settedRoute        func(*AppClient, *http.Request) = nil
-	settedLoadBalancer LoadBalancer                    = &DefaultLoadBalancer{}
-)
+	settedRoute        func(*AppClient, *http.Request)
+	settedLoadBalancer LoadBalancer
+}
 
 type callInfoType struct {
 	Timeout     time.Duration
@@ -47,147 +50,168 @@ type callInfoType struct {
 	SSL         bool
 }
 
-// IsServer 返回当前节点是否作为服务端运行
-func IsServer() bool { return isServer }
+// DefaultDiscoverer 默认的全局发现服务实例
+var DefaultDiscoverer = NewDiscoverer()
 
-// IsClient 返回当前节点是否作为客户端运行
-func IsClient() bool { return isClient }
-
-// logError 记录 Discover 内部错误
-func logError(msg string, extra ...any) {
-	_logger.Error("Discover: "+msg, append(extra, "app", Config.App, "addr", myAddr)...)
+// NewDiscoverer 创建一个新的发现服务实例
+func NewDiscoverer() *Discoverer {
+	return &Discoverer{
+		Config: ConfigStruct{
+			Weight:         100,
+			CallRetryTimes: 10,
+		},
+		logger:             log.DefaultLogger,
+		calls:              make(map[string]*callInfoType),
+		appNodes:           make(map[string]map[string]*NodeInfo),
+		appSubscribed:      make(map[string]bool),
+		settedLoadBalancer: &DefaultLoadBalancer{},
+	}
 }
 
-// logInfo 记录 Discover 内部信息
-func logInfo(msg string, extra ...any) {
-	_logger.Info("Discover: "+msg, append(extra, "app", Config.App, "addr", myAddr)...)
+// IsServer 返回当前节点是否作为服务端运行
+func (d *Discoverer) IsServer() bool { return d.isServer }
+
+// IsClient 返回当前节点是否作为客户端运行
+func (d *Discoverer) IsClient() bool { return d.isClient }
+
+func (d *Discoverer) logError(msg string, extra ...any) {
+	d.logger.Error("Discover: "+msg, append(extra, "app", d.Config.App, "addr", d.myAddr)...)
+}
+
+func (d *Discoverer) logInfo(msg string, extra ...any) {
+	d.logger.Info("Discover: "+msg, append(extra, "app", d.Config.App, "addr", d.myAddr)...)
 }
 
 // SetLogger 设置 Discover 使用的全局 Logger
-func SetLogger(logger *log.Logger) {
-	_logger = logger
+func (d *Discoverer) SetLogger(logger *log.Logger) {
+	d.logger = logger
 }
 
-// Init 初始化 Discover 配置，通常由 Start 自动调用
-func Init() {
-	appLock.Lock()
-	defer appLock.Unlock()
-	if _inited {
+// Init 初始化 Discover 配置
+func (d *Discoverer) Init() {
+	d.appLock.Lock()
+	defer d.appLock.Unlock()
+	if d.inited {
 		return
 	}
-	_inited = true
-	_ = config.Load(&Config, "discover")
-
-	if Config.CallRetryTimes <= 0 {
-		Config.CallRetryTimes = 10
-	}
-	if Config.Weight <= 0 {
-		Config.Weight = 100
-	}
-	if Config.Registry == "" {
-		Config.Registry = DefaultRegistry
+	d.inited = true
+	// 如果是默认实例，尝试加载配置
+	if d == DefaultDiscoverer {
+		_ = config.Load(&d.Config, "discover")
+		Config = d.Config // 保持 Config 变量同步
 	}
 
-	_logger = log.New(id.MakeID(12))
+	if d.Config.CallRetryTimes <= 0 {
+		d.Config.CallRetryTimes = 10
+	}
+	if d.Config.Weight <= 0 {
+		d.Config.Weight = 100
+	}
+	if d.Config.Registry == "" {
+		d.Config.Registry = DefaultRegistry
+	}
+
+	if d.logger == log.DefaultLogger || d.logger == nil {
+		d.logger = log.New(id.MakeID(12))
+	}
 }
 
 // Start 启动服务发现，指定当前节点的外部访问地址
-func Start(addr string) bool {
-	Init()
-	myAddr = addr
+func (d *Discoverer) Start(addr string) bool {
+	d.Init()
+	d.myAddr = addr
 
-	isServer = Config.App != "" && Config.Weight > 0
-	if isServer && Config.Registry != "" {
-		serverRedisPool = redis.GetRedis(Config.Registry, _logger)
-		if serverRedisPool.Error != nil {
-			logError(serverRedisPool.Error.Error())
+	d.isServer = d.Config.App != "" && d.Config.Weight > 0
+	if d.isServer && d.Config.Registry != "" {
+		d.serverRedisPool = redis.GetRedis(d.Config.Registry, d.logger)
+		if d.serverRedisPool.Error != nil {
+			d.logError(d.serverRedisPool.Error.Error())
 		}
 
 		// 注册节点
-		if serverRedisPool.Do("HSET", Config.App, addr, Config.Weight).Error == nil {
-			serverRedisPool.Do("SETEX", Config.App+"_"+addr, 10, "1")
-			logInfo("registered")
-			serverRedisPool.PUBLISH("CH_"+Config.App, fmt.Sprintf("%s %d", addr, Config.Weight))
-			daemonRunning = true
-			daemonStopChan = make(chan bool)
-			go daemon()
+		if d.serverRedisPool.Do("HSET", d.Config.App, addr, d.Config.Weight).Error == nil {
+			d.serverRedisPool.Do("SETEX", d.Config.App+"_"+addr, 10, "1")
+			d.logInfo("registered")
+			d.serverRedisPool.PUBLISH("CH_"+d.Config.App, fmt.Sprintf("%s %d", addr, d.Config.Weight))
+			d.daemonRunning = true
+			d.daemonStopChan = make(chan bool)
+			go d.daemon()
 		} else {
-			logError("register failed")
+			d.logError("register failed")
 		}
 	}
 
-	calls := getCalls()
+	calls := d.getCalls()
 	if len(calls) > 0 {
 		for app, conf := range calls {
-			addApp(app, conf, false)
+			d.addApp(app, conf, false)
 		}
-		if !startSub() {
+		if !d.startSub() {
 			return false
 		}
 	}
 	return true
 }
 
-func daemon() {
-	logInfo("daemon thread started")
-	// 每 5 秒心跳一次，降低 Redis 压力，TTL 保持 10 秒
+func (d *Discoverer) daemon() {
+	d.logInfo("daemon thread started")
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
-	for daemonRunning {
+	for d.daemonRunning {
 		<-ticker.C
-		if !daemonRunning {
+		if !d.daemonRunning {
 			break
 		}
 
-		if isServer && serverRedisPool != nil {
-			if !serverRedisPool.Do("HEXISTS", Config.App, myAddr).Bool() {
-				logInfo("lost app registered info, re-registering")
-				if serverRedisPool.Do("HSET", Config.App, myAddr, Config.Weight).Error == nil {
-					serverRedisPool.Do("SETEX", Config.App+"_"+myAddr, 10, "1")
-					serverRedisPool.PUBLISH("CH_"+Config.App, fmt.Sprintf("%s %d", myAddr, Config.Weight))
+		if d.isServer && d.serverRedisPool != nil {
+			if !d.serverRedisPool.Do("HEXISTS", d.Config.App, d.myAddr).Bool() {
+				d.logInfo("lost app registered info, re-registering")
+				if d.serverRedisPool.Do("HSET", d.Config.App, d.myAddr, d.Config.Weight).Error == nil {
+					d.serverRedisPool.Do("SETEX", d.Config.App+"_"+d.myAddr, 10, "1")
+					d.serverRedisPool.PUBLISH("CH_"+d.Config.App, fmt.Sprintf("%s %d", d.myAddr, d.Config.Weight))
 				}
 			} else {
-				serverRedisPool.Do("SETEX", Config.App+"_"+myAddr, 10, "1")
+				d.serverRedisPool.Do("SETEX", d.Config.App+"_"+d.myAddr, 10, "1")
 			}
 		}
 	}
-	logInfo("daemon thread stopped")
-	if daemonStopChan != nil {
-		daemonStopChan <- true
+	d.logInfo("daemon thread stopped")
+	if d.daemonStopChan != nil {
+		d.daemonStopChan <- true
 	}
 }
 
-func startSub() bool {
-	if Config.Registry == "" {
+func (d *Discoverer) startSub() bool {
+	if d.Config.Registry == "" {
 		return true
 	}
 
-	appLock.Lock()
-	if clientRedisPool == nil {
-		clientRedisPool = redis.GetRedis(Config.Registry, _logger)
+	d.appLock.Lock()
+	if d.clientRedisPool == nil {
+		d.clientRedisPool = redis.GetRedis(d.Config.Registry, d.logger)
 	}
 
-	if pubsubRedisPool == nil {
-		pubsubRedisPool = redis.GetRedis(Config.Registry, _logger.New(id.MakeID(12)))
+	if d.pubsubRedisPool == nil {
+		d.pubsubRedisPool = redis.GetRedis(d.Config.Registry, d.logger.New(id.MakeID(12)))
 		// 订阅所有已注册的应用
-		for app := range appSubscribed {
-			subscribeAppUnderLock(app)
+		for app := range d.appSubscribed {
+			d.subscribeAppUnderLock(app)
 		}
 		// 必须在释放锁之前完成配置，但在释放锁之后启动，避免死锁
-		appLock.Unlock()
-		pubsubRedisPool.Start()
-		appLock.Lock()
+		d.appLock.Unlock()
+		d.pubsubRedisPool.Start()
+		d.appLock.Lock()
 	}
 
-	isClient = true
-	appLock.Unlock()
+	d.isClient = true
+	d.appLock.Unlock()
 	return true
 }
 
-func subscribeAppUnderLock(app string) {
-	pubsubRedisPool.Subscribe("CH_"+app, func() {
-		fetchApp(app)
+func (d *Discoverer) subscribeAppUnderLock(app string) {
+	d.pubsubRedisPool.Subscribe("CH_"+app, func() {
+		d.fetchApp(app)
 	}, func(data []byte) {
 		a := strings.Split(string(data), " ")
 		addr := a[0]
@@ -195,43 +219,42 @@ func subscribeAppUnderLock(app string) {
 		if len(a) == 2 {
 			weight = cast.Int(a[1])
 		}
-		logInfo("received node update", "app", app, "addr", addr, "weight", weight)
-		pushNode(app, addr, weight)
+		d.logInfo("received node update", "app", app, "addr", addr, "weight", weight)
+		d.pushNode(app, addr, weight)
 	})
 }
 
 // Stop 停止 Discover 并从注册中心注销当前节点
-func Stop() {
-	appLock.Lock()
-	if isClient && pubsubRedisPool != nil {
-		pubsubRedisPool.Stop()
-		isClient = false
+func (d *Discoverer) Stop() {
+	d.appLock.Lock()
+	if d.isClient && d.pubsubRedisPool != nil {
+		d.pubsubRedisPool.Stop()
+		d.isClient = false
 	}
 
-	if isServer {
-		daemonRunning = false
-		if serverRedisPool != nil {
-			serverRedisPool.Do("HDEL", Config.App, myAddr)
-			serverRedisPool.Do("DEL", Config.App+"_"+myAddr)
-			serverRedisPool.PUBLISH("CH_"+Config.App, fmt.Sprintf("%s %d", myAddr, 0))
+	if d.isServer {
+		d.daemonRunning = false
+		if d.serverRedisPool != nil {
+			d.serverRedisPool.Do("HDEL", d.Config.App, d.myAddr)
+			d.serverRedisPool.Do("DEL", d.Config.App+"_"+d.myAddr)
+			d.serverRedisPool.PUBLISH("CH_"+d.Config.App, fmt.Sprintf("%s %d", d.myAddr, 0))
 		}
-		isServer = false
+		d.isServer = false
 	}
-	appLock.Unlock()
+	d.appLock.Unlock()
 }
 
 // Wait 等待守护进程退出
-func Wait() {
-	if daemonStopChan != nil {
-		<-daemonStopChan
-		daemonStopChan = nil
+func (d *Discoverer) Wait() {
+	if d.daemonStopChan != nil {
+		<-d.daemonStopChan
+		d.daemonStopChan = nil
 	}
 }
 
 // EasyStart 自动根据环境变量和本地网卡信息启动 Discover
-// 返回监听的 IP 和 端口
-func EasyStart() (string, int) {
-	Init()
+func (d *Discoverer) EasyStart() (string, int) {
+	d.Init()
 	port := 0
 	if listen := os.Getenv("DISCOVER_LISTEN"); listen != "" {
 		if _, p, err := net.SplitHostPort(listen); err == nil {
@@ -243,7 +266,7 @@ func EasyStart() (string, int) {
 
 	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 	if err != nil {
-		logError("failed to listen", "err", err)
+		d.logError("failed to listen", "err", err)
 		return "", 0
 	}
 	addrInfo := ln.Addr().(*net.TCPAddr)
@@ -259,7 +282,7 @@ func EasyStart() (string, int) {
 				if ip4 == nil || !ip4.IsGlobalUnicast() {
 					continue
 				}
-				if Config.IpPrefix != "" && strings.HasPrefix(ip4.String(), Config.IpPrefix) {
+				if d.Config.IpPrefix != "" && strings.HasPrefix(ip4.String(), d.Config.IpPrefix) {
 					ip = ip4
 					break
 				}
@@ -271,7 +294,7 @@ func EasyStart() (string, int) {
 	}
 
 	addr := fmt.Sprintf("%s:%d", ip.String(), port)
-	if !Start(addr) {
+	if !d.Start(addr) {
 		return "", 0
 	}
 
@@ -279,50 +302,51 @@ func EasyStart() (string, int) {
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-sigChan
-		Stop()
+		d.Stop()
 	}()
 
 	return ip.String(), port
 }
 
 // AddExternalApp 动态添加需要发现的外部应用
-func AddExternalApp(app, callConf string) bool {
-	if addApp(app, callConf, true) {
-		if !isClient {
-			startSub()
+func (d *Discoverer) AddExternalApp(app, callConf string) bool {
+	if d.addApp(app, callConf, true) {
+		if !d.isClient {
+			d.startSub()
 		} else {
-			appLock.Lock()
-			subscribeAppUnderLock(app)
-			appLock.Unlock()
+			d.appLock.Lock()
+			d.subscribeAppUnderLock(app)
+			d.appLock.Unlock()
+			d.fetchApp(app) // 同步拉取一次
 		}
 		return true
 	}
 	return false
 }
 
-// SetNode 手动设置某个服务的节点信息（不通过注册中心）
-func SetNode(app, addr string, weight int) {
-	pushNode(app, addr, weight)
+// SetNode 手动设置某个服务的节点信息
+func (d *Discoverer) SetNode(app, addr string, weight int) {
+	d.pushNode(app, addr, weight)
 }
 
-func getCallInfo(app string) *callInfoType {
-	appLock.RLock()
-	defer appLock.RUnlock()
-	return _calls[app]
+func (d *Discoverer) getCallInfo(app string) *callInfoType {
+	d.appLock.RLock()
+	defer d.appLock.RUnlock()
+	return d.calls[app]
 }
 
 var numberMatcher = regexp.MustCompile(`^\d+(s|ms|us|µs|ns?)?$`)
 
-func addApp(app, callConf string, fetch bool) bool {
-	appLock.Lock()
-	if Config.Calls == nil {
-		Config.Calls = make(map[string]string)
+func (d *Discoverer) addApp(app, callConf string, fetch bool) bool {
+	d.appLock.Lock()
+	if d.Config.Calls == nil {
+		d.Config.Calls = make(map[string]string)
 	}
-	if Config.Calls[app] == callConf && _appNodes[app] != nil {
-		appLock.Unlock()
+	if d.Config.Calls[app] == callConf && d.appNodes[app] != nil {
+		d.appLock.Unlock()
 		return false
 	}
-	Config.Calls[app] = callConf
+	d.Config.Calls[app] = callConf
 
 	callInfo := &callInfoType{
 		Timeout:     10 * time.Second,
@@ -354,29 +378,29 @@ func addApp(app, callConf string, fetch bool) bool {
 		}
 	}
 
-	_calls[app] = callInfo
-	if _appNodes[app] == nil {
-		_appNodes[app] = make(map[string]*NodeInfo)
+	d.calls[app] = callInfo
+	if d.appNodes[app] == nil {
+		d.appNodes[app] = make(map[string]*NodeInfo)
 	}
-	appSubscribed[app] = true
-	appLock.Unlock()
+	d.appSubscribed[app] = true
+	d.appLock.Unlock()
 
-	if fetch {
-		fetchApp(app)
+	if fetch && d.isClient {
+		d.fetchApp(app)
 	}
 	return true
 }
 
-func fetchApp(app string) {
-	appLock.RLock()
-	pool := clientRedisPool
-	appLock.RUnlock()
+func (d *Discoverer) fetchApp(app string) {
+	d.appLock.RLock()
+	pool := d.clientRedisPool
+	d.appLock.RUnlock()
 	if pool == nil {
 		return
 	}
 
 	results := pool.Do("HGETALL", app).ResultMap()
-	
+
 	// 检查存活
 	for addr := range results {
 		if !pool.Do("EXISTS", app+"_"+addr).Bool() {
@@ -385,84 +409,132 @@ func fetchApp(app string) {
 		}
 	}
 
-	currentNodes := getAppNodes(app)
+	currentNodes := d.getAppNodes(app)
 	if currentNodes != nil {
 		for addr := range currentNodes {
 			if _, ok := results[addr]; !ok {
-				pushNode(app, addr, 0)
+				d.pushNode(app, addr, 0)
 			}
 		}
 	}
 
 	for addr, res := range results {
-		pushNode(app, addr, res.Int())
+		d.pushNode(app, addr, res.Int())
 	}
 }
 
-func getAppNodes(app string) map[string]*NodeInfo {
-	appLock.RLock()
-	defer appLock.RUnlock()
-	if _appNodes[app] == nil {
+func (d *Discoverer) getAppNodes(app string) map[string]*NodeInfo {
+	d.appLock.RLock()
+	defer d.appLock.RUnlock()
+	if d.appNodes[app] == nil {
 		return nil
 	}
 	nodes := make(map[string]*NodeInfo)
-	for k, v := range _appNodes[app] {
+	for k, v := range d.appNodes[app] {
 		nodes[k] = v
 	}
 	return nodes
 }
 
-func getCalls() map[string]string {
-	appLock.RLock()
-	defer appLock.RUnlock()
+func (d *Discoverer) getCalls() map[string]string {
+	d.appLock.RLock()
+	defer d.appLock.RUnlock()
 	calls := make(map[string]string)
-	for k, v := range Config.Calls {
+	for k, v := range d.Config.Calls {
 		calls[k] = v
 	}
 	return calls
 }
 
 // GetAppNodes 获取某个应用的所有节点列表
-func GetAppNodes(app string) map[string]*NodeInfo {
-	return getAppNodes(app)
+func (d *Discoverer) GetAppNodes(app string) map[string]*NodeInfo {
+	return d.getAppNodes(app)
 }
 
-func pushNode(app, addr string, weight int) {
-	appLock.Lock()
-	defer appLock.Unlock()
+func (d *Discoverer) pushNode(app, addr string, weight int) {
+	d.appLock.Lock()
+	defer d.appLock.Unlock()
 
 	if weight <= 0 {
-		if _appNodes[app] != nil {
-			delete(_appNodes[app], addr)
+		if d.appNodes[app] != nil {
+			delete(d.appNodes[app], addr)
 		}
 		return
 	}
 
-	if _appNodes[app] == nil {
-		_appNodes[app] = make(map[string]*NodeInfo)
+	if d.appNodes[app] == nil {
+		d.appNodes[app] = make(map[string]*NodeInfo)
 	}
 
-	if node, ok := _appNodes[app][addr]; ok {
+	if node, ok := d.appNodes[app][addr]; ok {
 		if node.Weight != weight {
-			// 调整 UsedTimes 保持相对均衡，使用 Load() 和 Store()
 			used := node.UsedTimes.Load()
 			node.UsedTimes.Store(uint64(float64(used) / float64(node.Weight) * float64(weight)))
 			node.Weight = weight
 		}
 	} else {
 		var avgUsed uint64 = 0
-		if len(_appNodes[app]) > 0 {
+		if len(d.appNodes[app]) > 0 {
 			var totalScore float64
-			for _, n := range _appNodes[app] {
+			for _, n := range d.appNodes[app] {
 				totalScore += float64(n.UsedTimes.Load()) / float64(n.Weight)
 			}
-			avgUsed = uint64(totalScore / float64(len(_appNodes[app])) * float64(weight))
+			avgUsed = uint64(totalScore / float64(len(d.appNodes[app])) * float64(weight))
 		}
 		node := &NodeInfo{
 			Addr:   addr,
 			Weight: weight,
 		}
 		node.UsedTimes.Store(avgUsed)
-		_appNodes[app][addr] = node
+		d.appNodes[app][addr] = node
 	}
+}
+
+// 以下是包级别 API，通过转发给 DefaultDiscoverer 实现兼容性
+
+func IsServer() bool { return DefaultDiscoverer.IsServer() }
+func IsClient() bool { return DefaultDiscoverer.IsClient() }
+
+func logError(msg string, extra ...any) {
+	DefaultDiscoverer.logError(msg, extra...)
+}
+
+func logInfo(msg string, extra ...any) {
+	DefaultDiscoverer.logInfo(msg, extra...)
+}
+
+func SetLogger(logger *log.Logger) {
+	DefaultDiscoverer.SetLogger(logger)
+}
+
+func Init() {
+	DefaultDiscoverer.Init()
+}
+
+func Start(addr string) bool {
+	return DefaultDiscoverer.Start(addr)
+}
+
+func Stop() {
+	DefaultDiscoverer.Stop()
+}
+
+func Wait() {
+	DefaultDiscoverer.Wait()
+}
+
+func EasyStart() (string, int) {
+	return DefaultDiscoverer.EasyStart()
+}
+
+func AddExternalApp(app, callConf string) bool {
+	return DefaultDiscoverer.AddExternalApp(app, callConf)
+}
+
+func SetNode(app, addr string, weight int) {
+	DefaultDiscoverer.SetNode(app, addr, weight)
+}
+
+func GetAppNodes(app string) map[string]*NodeInfo {
+	return DefaultDiscoverer.GetAppNodes(app)
 }

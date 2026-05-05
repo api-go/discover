@@ -2,7 +2,12 @@ package discover
 
 import "net/http"
 
-// SetRoute 设置全局路由规则，可以在请求前修改 App、Method、Path 等信息
+// SetRoute 设置全局路由规则
 func SetRoute(route func(appClient *AppClient, request *http.Request)) {
-	settedRoute = route
+	DefaultDiscoverer.SetRoute(route)
+}
+
+// SetRoute 设置路由规则
+func (d *Discoverer) SetRoute(route func(appClient *AppClient, request *http.Request)) {
+	d.settedRoute = route
 }
