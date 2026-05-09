@@ -28,6 +28,8 @@ discover:
 
 ### 服务调用 (Caller)
 - `NewCaller(request *http.Request, logger *log.Logger) *Caller`: 创建调用器。传入原始请求可自动透传 Header。
+- `Call[T](method, app, path, data, headers...) (T, error)`: **[推荐]** 泛型快捷调用，自动解析 JSON 结果。
+- `CallT[T](caller, ...) (T, error)`: 针对指定调用器的泛型调用。
 - `Caller.Get / Post / Put / Delete / Head`: 发起同步请求。
 - `Caller.Do(method, app, path, data, headers...)`: 发起通用请求，返回 `http.Result`。
 - `Caller.Open(app, path, headers...)`: 发起 WebSocket 连接。

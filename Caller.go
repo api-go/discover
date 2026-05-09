@@ -88,6 +88,22 @@ func (c *Caller) Head(app, path string, headers ...string) *gohttp.Result {
 	return c.Do("HEAD", app, path, nil, headers...)
 }
 
+// Call 发起通用的泛型请求并自动解析响应
+func Call[T any](method, app, path string, data any, headers ...string) (T, error) {
+	return CallT[T](DefaultDiscoverer.NewCaller(nil, nil), method, app, path, data, headers...)
+}
+
+// CallT 发起泛型请求并自动解析响应 (由于 Go 方法不支持泛型，故使用函数)
+func CallT[T any](c *Caller, method, app, path string, data any, headers ...string) (T, error) {
+	var result T
+	res := c.Do(method, app, path, data, headers...)
+	if res.Error != nil {
+		return result, res.Error
+	}
+	err := res.To(&result)
+	return result, err
+}
+
 // Do 发起通用请求
 func (c *Caller) Do(method, app, path string, data any, headers ...string) *gohttp.Result {
 	r, _ := c.DoWithNode(method, app, "", path, data, headers...)

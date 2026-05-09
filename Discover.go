@@ -129,6 +129,10 @@ func (d *Discoverer) Init() {
 		SetConfig(conf) // 保持全局 Config 变量同步
 	}
 
+	if conf.App == "" {
+		conf.App = os.Getenv("DISCOVER_APP")
+	}
+
 	if conf.CallRetryTimes <= 0 {
 		conf.CallRetryTimes = 10
 	}
