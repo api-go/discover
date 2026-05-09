@@ -29,9 +29,7 @@ func (ac *AppClient) logError(msg string, extra ...any) {
 
 // Next 获取下一个可用节点
 func (ac *AppClient) Next(app string, request *http.Request) *NodeInfo {
-	if ac.discoverer == nil {
-		ac.discoverer = DefaultDiscoverer
-	}
+	
 	return ac.NextWithNode(app, "", request)
 }
 
@@ -39,9 +37,8 @@ func (ac *AppClient) Next(app string, request *http.Request) *NodeInfo {
 func (ac *AppClient) CheckApp(app string) bool {
 	nodes := ac.discoverer.GetAppNodes(app)
 	if nodes == nil {
-		conf := ac.discoverer.GetConfig()
-		if !ac.discoverer.AddExternalApp(app, "") {
-			ac.logError("app not found", "app", app, "calls", conf.Calls)
+		if !ac.discoverer.AddExternalApp(app, CallConfig{}) {
+			ac.logError("app not found", "app", app, "calls", ac.discoverer.config.Calls)
 			return false
 		}
 	}
@@ -66,10 +63,9 @@ func (ac *AppClient) NextWithNode(app, withNode string, request *http.Request) *
 		return allNodes[withNode]
 	}
 
-	conf := ac.discoverer.GetConfig()
 	readyNodes := make([]*NodeInfo, 0, len(allNodes))
 	for _, node := range allNodes {
-		if ac.excludes[node.Addr] || node.FailedTimes.Load() >= int32(conf.CallRetryTimes) {
+		if ac.excludes[node.Addr] || node.FailedTimes.Load() >= int32(ac.discoverer.config.CallRetryTimes) {
 			continue
 		}
 		readyNodes = append(readyNodes, node)

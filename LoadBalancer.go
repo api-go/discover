@@ -5,11 +5,6 @@ import (
 	"time"
 )
 
-// SetLoadBalancer 设置全局负载均衡策略
-func SetLoadBalancer(lb LoadBalancer) {
-	DefaultDiscoverer.SetLoadBalancer(lb)
-}
-
 // SetLoadBalancer 设置负载均衡策略
 func (d *Discoverer) SetLoadBalancer(lb LoadBalancer) {
 	d.settedLoadBalancer = lb

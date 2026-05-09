@@ -1,50 +1,114 @@
-# Discover
+# @go/discover
 
-基于 Redis 的极简服务发现与负载均衡组件。
+> **Maintainer Statement:** 本项目完全由 AI 维护。任何改动均遵循代码质量与性能的最佳实践。
 
-## 核心特性
-- **自动注册与发现**: 基于 Redis 的服务节点自动注册、心跳维持及实时更新。
-- **智能负载均衡**: 支持按权重分配、自动剔除故障节点、重试机制。
-- **无感透传**: 自动处理微服务间的 Header 透传（如 TraceID、UserID 等）。
-- **多协议支持**: 支持 HTTP/1.1、HTTP/2 (H2C)、WebSocket。
+`@go/discover` 是一个**无状态、参数驱动**的极简服务发现与负载均衡组件。它基于 Redis 实现，专注于消除微服务调用间的摩擦，并原生支持 Header 链路透传。
 
-## 配置参考
-```yaml
-discover:
-  registry: redis://127.0.0.1:6379/15 # 注册中心地址
-  app: my-service                     # 当前应用名称
-  weight: 100                         # 节点权重
-  calls:                              # 调用的服务定义
-    auth: 1s:my-token:2              # 服务名: 超时:Token:HTTP版本
-    user: 500ms
+## 🎯 设计哲学
+
+- **纯粹无状态 (Stateless)**：模块自身不读取配置文件，不依赖任何特定框架的上下文。配置加载由调用方负责，参数通过入口函数注入。
+- **面向对象隔离**：支持多实例共存。可以在同一个进程中同时连接不同的注册中心，实现复杂的网关分发。
+- **内存安全与高性能**：访问令牌 (Token) 强制受 `@go/safe` 内存保护；调用耗时由 `@go/timer` 追踪；网络层支持 H2C (HTTP/2 Cleartext)。
+
+## 📦 安装
+
+```bash
+go get apigo.cc/go/discover
 ```
 
-## API 指南
+---
 
-### 初始化与启动
-- `Start(addr string) bool`: 启动服务发现，指定当前节点的外部访问地址。
-- `EasyStart() (string, int)`: 自动监听可用端口并启动服务发现。返回 IP 和端口。
-- `Stop()`: 停止服务并注销节点。
+## 🛠 API Reference
 
-### 服务调用 (Caller)
-- `NewCaller(request *http.Request, logger *log.Logger) *Caller`: 创建调用器。传入原始请求可自动透传 Header。
-- `Call[T](method, app, path, data, headers...) (T, error)`: **[推荐]** 泛型快捷调用，自动解析 JSON 结果。
-- `CallT[T](caller, ...) (T, error)`: 针对指定调用器的泛型调用。
-- `Caller.Get / Post / Put / Delete / Head`: 发起同步请求。
-- `Caller.Do(method, app, path, data, headers...)`: 发起通用请求，返回 `http.Result`。
-- `Caller.Open(app, path, headers...)`: 发起 WebSocket 连接。
+### 1. 核心构造函数 (Entry Points)
 
-### 手动管理
-- `AddExternalApp(app, callConf string)`: 手动添加需要发现的外部应用。
-- `SetNode(app, addr string, weight int)`: 手动设置某个服务的节点信息。
+#### Start: 服务端模式
+在注册中心登记当前节点。
+- **原型**: `func Start(registry, app, addr string, logger *log.Logger, confs ...Config) *Discoverer`
+- **参数**:
+    - `registry`: 注册中心地址。支持 Redis URL (如 `redis://127.0.0.1:6379/15`) 或 `@go/redis` 下定义的 Redis 配置键名。
+    - `app`: 当前应用名称。
+    - `addr`: 当前节点外部可访问的地址 (如 `192.168.1.10:8080`)。
+    - `logger`: 必填。建议传入带有 TraceID 的 Logger 以确保链路可追踪。允许传 `nil` (回退至 `log.DefaultLogger`)。
+    - `confs`: 可选。传递 `discover.Config` 结构体进行精细化配置。
 
-### 负载均衡与路由
-- `SetLoadBalancer(lb LoadBalancer)`: 自定义全局负载均衡策略。
-- `SetRoute(route func(ac *AppClient, r *http.Request))`: 设置全局路由拦截规则。
+#### Open: 纯客户端模式
+仅用于调用其他服务。
+- **原型**: `func Open(registry string, logger *log.Logger, confs ...Config) *Discoverer`
 
-## 环境变量
-- `DISCOVER_REGISTRY`: 注册中心地址。
-- `DISCOVER_APP`: 应用名。
-- `DISCOVER_WEIGHT`: 节点权重。
-- `DISCOVER_CALLS`: 调用的应用定义。
-- `DISCOVER_LISTEN`: EasyStart 监听地址。
+### 2. Discoverer 实例方法 (RPC 调用)
+
+所有的业务调用均应通过 `Start` 或 `Open` 返回的 `*Discoverer` 实例进行。
+
+#### 基础 HTTP 调用
+返回 `*gohttp.Result`，可结合 `go/http.To[T]` 实现结果绑定。
+- `func (d *Discoverer) Get(app, path string, headers ...string) *gohttp.Result`
+- `func (d *Discoverer) Post(app, path string, data any, headers ...string) *gohttp.Result`
+- `func (d *Discoverer) Put(app, path string, data any, headers ...string) *gohttp.Result`
+- `func (d *Discoverer) Delete(app, path string, data any, headers ...string) *gohttp.Result`
+- `func (d *Discoverer) Head(app, path string, headers ...string) *gohttp.Result`
+- `func (d *Discoverer) Do(method, app, path string, data any, headers ...string) *gohttp.Result`
+
+#### 链路透传调用 (Context Propagation)
+通过 `From(r)` 提取原始请求上下文（TraceID, UserID 等）并向后透传。
+- **原型**: `func (d *Discoverer) From(request *http.Request) *Caller`
+- **示例**: `res := d.From(r).Post("user-service", "/create", reqData)`
+
+#### WebSocket 支持
+- **原型**: `func (d *Discoverer) Open(app, path string, headers ...string) *websocket.Conn`
+
+#### 实例生命周期
+- `func (d *Discoverer) Stop()`: 优雅停止心跳、注销节点并释放内部连接池。
+
+### 3. 配置结构 (Strongly Typed Config)
+
+#### Config: 发现器配置
+```go
+type Config struct {
+    Weight         int                    // 节点权重 (默认 100)
+    Calls          map[string]CallConfig  // 依赖服务的调用配置
+    CallRetryTimes int                    // 下游节点的最大重试次数 (默认 10)
+}
+```
+
+#### CallConfig: 下游服务调用配置
+```go
+type CallConfig struct {
+    Timeout time.Duration  // 超时时间
+    Token   *safe.SafeBuf  // 访问凭据 (强制安全存储，防止内存泄露)
+    Http2   bool           // 是否强制使用 HTTP/2 (H2C)
+    SSL     bool           // 是否使用 HTTPS/WSS 协议
+}
+```
+
+---
+
+## 💡 最佳实践示例
+
+### 标准服务端启动
+```go
+import (
+    "apigo.cc/go/discover"
+    "apigo.cc/go/log"
+)
+
+// 准备安全令牌
+token := safe.NewSafeBuf([]byte("secure-app-token"))
+
+d := discover.Start(
+    "redis://127.0.0.1:6379/15",
+    "user-service",
+    "192.168.1.10:8080",
+    logger,
+    discover.Config{
+        Calls: map[string]discover.CallConfig{
+            "auth-service": { Timeout: time.Second, Token: token },
+        },
+    },
+)
+defer d.Stop()
+
+// 调用并自动解析
+res := d.Get("auth-service", "/api/verify")
+user, err := http.To[User](res)
+```

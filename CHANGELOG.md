@@ -1,6 +1,22 @@
 # CHANGELOG
 
-## v1.0.5 (2026-05-05)
+## v1.0.10 (2026-05-09)
+- **API Redesign (Elegant API)**:
+  - 引入包级泛型便捷调用：`Get[T]`, `Post[T]`, `Put[T]`, `Delete[T]`。
+  - 引入 `From(r *http.Request)` 包装器，优雅实现微服务 Header 自动透传。
+  - 统一 API 入口，区分服务端（`Start`/`Stop`）与客户端（`Get`/`Post`/`Do`）模式。
+  - 移除晦涩的 `CallT` 泛型辅助函数。
+  - 增加 `SetApp`, `SetRegistry`, `SetWeight` 便捷配置接口。
+- **Infrastructure Alignment**:
+  - 耗时统计切换至 `go/timer` 高性能引擎。
+  - 服务令牌（Token）采用 `go/safe.SafeBuf` 内存安全保护。
+  - 依赖更新：`go/http` 升级至 `v1.0.10`。
+- **Stability**:
+  - 优化 `Stop()` 逻辑：彻底重置实例状态，支持在单进程多次启动/停止（如单元测试场景）。
+  - 优化 `Init()` 逻辑：支持程序化配置与文件配置的智能合并。
+  - 修复 `AddExternalApp` 可能导致的订阅死锁问题。
+
+## v1.0.9 (2026-05-05)
 - **Stability & Testing**:
   - 修复 `AddExternalApp` 在新客户端场景下可能遗漏同步拉取节点的问题。
   - 优化测试用例性能：将 Mock Server 默认超时导致的 100s 阻塞通过强制 HTTP/1.1 配置解决。

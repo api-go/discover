@@ -1,37 +1,21 @@
 package discover
 
 import (
-	"sync"
+	"time"
+	"apigo.cc/go/safe"
 )
 
-// ConfigStruct 存储发现服务的配置
-type ConfigStruct struct {
-	Registry       string            // 注册中心地址，如 redis://:@127.0.0.1:6379/15
-	App            string            // 当前应用名称
-	Weight         int               // 权重，默认为 100
-	Calls          map[string]string // 调用的应用列表及其配置
-	CallRetryTimes int               // 调用重试次数
-	IpPrefix       string            // 指定使用的 IP 网段
+// CallConfig 下游服务调用配置
+type CallConfig struct {
+	Timeout time.Duration    // 请求超时时间
+	Token   *safe.SafeBuf    // 访问凭证 (必须安全存储)
+	Http2   bool             // 是否强制使用 HTTP/2 (H2C/H2)
+	SSL     bool             // 是否使用 HTTPS/WSS
 }
 
-// Config 存储发现服务的全局配置（兼容旧代码）
-var Config = ConfigStruct{
-	Weight:         100,
-	CallRetryTimes: 10,
-}
-
-var configLock sync.RWMutex
-
-// SetConfig 安全地设置全局配置
-func SetConfig(conf ConfigStruct) {
-	configLock.Lock()
-	defer configLock.Unlock()
-	Config = conf
-}
-
-// GetConfig 安全地获取全局配置
-func GetConfig() ConfigStruct {
-	configLock.RLock()
-	defer configLock.RUnlock()
-	return Config
+// Config 存储发现服务的可选配置
+type Config struct {
+	Weight         int                    // 权重，默认为 100
+	Calls          map[string]CallConfig  // 调用的应用列表及其配置
+	CallRetryTimes int                    // 调用重试次数
 }

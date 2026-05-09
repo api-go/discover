@@ -37,29 +37,21 @@ func TestMultipleDiscoverer(t *testing.T) {
 	registry := "redis://127.0.0.1:6379/15"
 
 	// 实例 1
-	d1 := discover.NewDiscoverer()
-	c1conf := d1.GetConfig()
-	c1conf.App = "app1"
-	c1conf.Registry = registry + "?id=1"
-	d1.SetConfig(c1conf)
-	if !d1.Start(addr1) {
+	d1 := discover.Start(registry + "?id=1", "app1", addr1, nil)
+	if d1 == nil {
 		t.Skip("redis not available")
 	}
 	defer d1.Stop()
 
 	// 实例 2
-	d2 := discover.NewDiscoverer()
-	c2conf := d2.GetConfig()
-	c2conf.App = "app2"
-	c2conf.Registry = registry + "?id=2"
-	d2.SetConfig(c2conf)
-	if !d2.Start(addr2) {
+	d2 := discover.Start(registry + "?id=2", "app2", addr2, nil)
+	if d2 == nil {
 		t.Skip("redis not available")
 	}
 	defer d2.Stop()
 
 	// 实例 1 发现并调用自己
-	d1.AddExternalApp("app1", "1")
+	d1.AddExternalApp("app1", discover.CallConfig{})
 	time.Sleep(200 * time.Millisecond) // 等待同步
 	c1 := d1.NewCaller(nil, nil)
 	res1 := c1.Get("app1", "/")
@@ -68,7 +60,7 @@ func TestMultipleDiscoverer(t *testing.T) {
 	}
 
 	// 实例 2 发现并调用 实例 1
-	d2.AddExternalApp("app1", "1")
+	d2.AddExternalApp("app1", discover.CallConfig{})
 	time.Sleep(200 * time.Millisecond) // 等待同步
 	c2 := d2.NewCaller(nil, nil)
 	res2 := c2.Get("app1", "/")
@@ -77,7 +69,7 @@ func TestMultipleDiscoverer(t *testing.T) {
 	}
 
 	// 验证：d1 也可以调用 app2，只要正确配置
-	d1.AddExternalApp("app2", "1")
+	d1.AddExternalApp("app2", discover.CallConfig{})
 	time.Sleep(200 * time.Millisecond) // 等待同步
 	res3 := c1.Get("app2", "/")
 	if res3.Error != nil || res3.String() != "OK2" {

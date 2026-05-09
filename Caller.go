@@ -11,6 +11,7 @@ import (
 	"apigo.cc/go/cast"
 	gohttp "apigo.cc/go/http"
 	"apigo.cc/go/log"
+	"apigo.cc/go/timer"
 )
 
 func (d *Discoverer) getHttpClient(app string, timeout time.Duration, h2c bool) *gohttp.Client {
@@ -45,12 +46,10 @@ type Caller struct {
 	logger     *log.Logger   // 用于日志记录的 Logger
 }
 
-// NewCaller 创建一个新的调用器
-func NewCaller(request *http.Request, logger *log.Logger) *Caller {
-	return DefaultDiscoverer.NewCaller(request, logger)
+func (d *Discoverer) From(request *http.Request) *Caller {
+	return &Caller{discoverer: d, Request: request, logger: d.logger}
 }
 
-// NewCaller 创建一个新的调用器实例
 func (d *Discoverer) NewCaller(request *http.Request, logger *log.Logger) *Caller {
 	return &Caller{discoverer: d, Request: request, logger: logger}
 }
@@ -88,20 +87,39 @@ func (c *Caller) Head(app, path string, headers ...string) *gohttp.Result {
 	return c.Do("HEAD", app, path, nil, headers...)
 }
 
-// Call 发起通用的泛型请求并自动解析响应
-func Call[T any](method, app, path string, data any, headers ...string) (T, error) {
-	return CallT[T](DefaultDiscoverer.NewCaller(nil, nil), method, app, path, data, headers...)
+// Get 发起 GET 请求
+func (d *Discoverer) Get(app, path string, headers ...string) *gohttp.Result {
+	return d.NewCaller(nil, nil).Get(app, path, headers...)
 }
 
-// CallT 发起泛型请求并自动解析响应 (由于 Go 方法不支持泛型，故使用函数)
-func CallT[T any](c *Caller, method, app, path string, data any, headers ...string) (T, error) {
-	var result T
-	res := c.Do(method, app, path, data, headers...)
-	if res.Error != nil {
-		return result, res.Error
-	}
-	err := res.To(&result)
-	return result, err
+// Post 发起 POST 请求
+func (d *Discoverer) Post(app, path string, data any, headers ...string) *gohttp.Result {
+	return d.NewCaller(nil, nil).Post(app, path, data, headers...)
+}
+
+// Put 发起 PUT 请求
+func (d *Discoverer) Put(app, path string, data any, headers ...string) *gohttp.Result {
+	return d.NewCaller(nil, nil).Put(app, path, data, headers...)
+}
+
+// Delete 发起 DELETE 请求
+func (d *Discoverer) Delete(app, path string, data any, headers ...string) *gohttp.Result {
+	return d.NewCaller(nil, nil).Delete(app, path, data, headers...)
+}
+
+// Head 发起 HEAD 请求
+func (d *Discoverer) Head(app, path string, headers ...string) *gohttp.Result {
+	return d.NewCaller(nil, nil).Head(app, path, headers...)
+}
+
+// Do 发起通用请求
+func (d *Discoverer) Do(method, app, path string, data any, headers ...string) *gohttp.Result {
+	return d.NewCaller(nil, nil).Do(method, app, path, data, headers...)
+}
+
+// Open 发起 WebSocket 连接
+func (d *Discoverer) Open(app, path string, headers ...string) *websocket.Conn {
+	return d.NewCaller(nil, nil).Open(app, path, headers...)
 }
 
 // Do 发起通用请求
@@ -143,9 +161,8 @@ func (c *Caller) doWithNode(manual bool, method, app, withNode, path string, dat
 		callerHeaders[headers[i-1]] = headers[i]
 	}
 
-	conf := c.discoverer.GetConfig()
 	if c.discoverer.isServer {
-		callerHeaders[HeaderFromApp] = conf.App
+		callerHeaders[HeaderFromApp] = c.discoverer.app
 		callerHeaders[HeaderFromNode] = c.discoverer.myAddr
 	}
 
@@ -178,9 +195,11 @@ func (c *Caller) doWithNode(manual bool, method, app, withNode, path string, dat
 		return &gohttp.Result{Error: fmt.Errorf("app %s not found", app)}, ""
 	}
 
-	callInfo := c.discoverer.getCallInfo(app)
-	if callInfo != nil && callInfo.Token != "" {
-		callerHeaders["Access-Token"] = callInfo.Token
+	callInfo, hasCallInfo := c.discoverer.getCallInfo(app)
+	if hasCallInfo && callInfo.Token != nil {
+		tk := callInfo.Token.Open()
+		callerHeaders["Access-Token"] = tk.String()
+		tk.Close()
 	}
 
 	settedHeaders := make([]string, 0, len(callerHeaders)*2)
@@ -195,13 +214,22 @@ func (c *Caller) doWithNode(manual bool, method, app, withNode, path string, dat
 		}
 
 		node.UsedTimes.Add(1)
-		startTime := time.Now()
+		tracker := timer.Start()
 		scheme := "http"
-		if callInfo != nil && callInfo.SSL {
+		if hasCallInfo && callInfo.SSL {
 			scheme = "https"
 		}
 
-		hc := c.discoverer.getHttpClient(app, callInfo.Timeout, callInfo.HttpVersion == 2 && !callInfo.SSL)
+		timeout := 10 * time.Second
+		h2c := false
+		if hasCallInfo {
+			if callInfo.Timeout > 0 {
+				timeout = callInfo.Timeout
+			}
+			h2c = callInfo.Http2 && !callInfo.SSL
+		}
+
+		hc := c.discoverer.getHttpClient(app, timeout, h2c)
 		hc.NoBody = c.NoBody
 
 		var res *gohttp.Result
@@ -240,7 +268,7 @@ func (c *Caller) doWithNode(manual bool, method, app, withNode, path string, dat
 			}
 		}
 
-		responseTime := time.Since(startTime)
+		responseTime := tracker.Record("call")
 		usedTimeMs := float32(responseTime.Nanoseconds()) / 1e6
 		c.discoverer.settedLoadBalancer.Response(&appClient, node, res.Error, res.Response, responseTime)
 
@@ -256,7 +284,7 @@ func (c *Caller) doWithNode(manual bool, method, app, withNode, path string, dat
 			c.logError(errStr, "app", app, "node", node.Addr, "path", path, "attempts", appClient.attempts)
 			appClient.Log(node.Addr, usedTimeMs, fmt.Errorf("%s", errStr))
 
-			if node.FailedTimes.Load() >= int32(conf.CallRetryTimes) {
+			if node.FailedTimes.Load() >= int32(c.discoverer.config.CallRetryTimes) {
 				c.discoverer.logError("node isolated locally due to high failures", "app", app, "node", node.Addr)
 			}
 			continue
@@ -272,3 +300,4 @@ func (c *Caller) doWithNode(manual bool, method, app, withNode, path string, dat
 
 	return &gohttp.Result{Error: fmt.Errorf("all nodes failed for %s %s", app, path)}, ""
 }
+
