@@ -8,13 +8,24 @@ const LogTypeDiscover = "discover"
 
 type DiscoverLog struct {
 	log.BaseLog
-	App      string  `log:"pos:9,color:cyan"`
-	Method   string  `log:"pos:10,color:magenta"`
-	Path     string  `log:"pos:11,color:blue"`
-	Node     string  `log:"pos:12,color:yellow"`
-	Attempts int     `log:"pos:13"`
-	UsedTime float32 `log:"pos:14,format:%.2fms"`
-	Error    string  `log:"pos:15,color:red"`
+	App      string  `log:"pos:6,color:cyan"`
+	Method   string  `log:"pos:7,color:magenta"`
+	Path     string  `log:"pos:8,color:blue"`
+	Node     string  `log:"pos:9,color:yellow"`
+	Attempts int     `log:"pos:10"`
+	UsedTime float32 `log:"pos:11,format:%.2fms"`
+	Error    string  `log:"pos:12,color:red"`
+}
+
+func (l *DiscoverLog) Reset() {
+	l.BaseLog.Reset()
+	l.App = ""
+	l.Method = ""
+	l.Path = ""
+	l.Node = ""
+	l.Attempts = 0
+	l.UsedTime = 0
+	l.Error = ""
 }
 
 func init() {
