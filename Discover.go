@@ -195,7 +195,7 @@ func (d *Discoverer) startSub() bool {
 	}
 
 	if d.pubsubRedisPool == nil {
-		d.pubsubRedisPool = redis.GetRedis(d.registry, d.logger.New(id.MakeID(12)))
+		d.pubsubRedisPool = redis.GetRedis(d.registry, d.logger.New(id.Get12BytesUltraPerSecond()))
 		// 订阅所有已注册的应用
 		for app := range d.appSubscribed {
 			d.subscribeApp(app)
