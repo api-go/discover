@@ -4,9 +4,9 @@ go 1.25.0
 
 require (
 	apigo.cc/go/cast v1.2.10
-	apigo.cc/go/http v1.0.10
+	apigo.cc/go/http v1.0.11
 	apigo.cc/go/id v1.0.7
-	apigo.cc/go/log v1.1.13
+	apigo.cc/go/log v1.1.16
 	apigo.cc/go/redis v1.0.9
 	apigo.cc/go/safe v1.0.7
 	apigo.cc/go/timer v1.0.7
