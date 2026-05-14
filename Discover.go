@@ -46,6 +46,8 @@ type Discoverer struct {
 
 
 
+var DefaultDiscoverer *Discoverer
+
 // IsServer 返回当前节点是否作为服务端运行
 func (d *Discoverer) IsServer() bool { return d.isServer }
 
@@ -130,9 +132,11 @@ func Start(registry, app, addr string, logger *log.Logger, confs ...Config) *Dis
 			d.addApp(callApp, c, false)
 		}
 		if !d.startSub() {
+			DefaultDiscoverer = d
 			return d
 		}
 	}
+	DefaultDiscoverer = d
 	return d
 }
 
@@ -147,7 +151,33 @@ func Open(registry string, logger *log.Logger, confs ...Config) *Discoverer {
 		}
 	}
 	d.startSub()
+	DefaultDiscoverer = d
 	return d
+}
+
+// NewCaller 创建一个新的调用器 (使用默认发现实例)
+func NewCaller(request *http.Request, logger *log.Logger) *Caller {
+	return DefaultDiscoverer.NewCaller(request, logger)
+}
+
+// Get 发起 GET 请求 (使用默认发现实例)
+func Get(app, path string, headers ...string) *gohttp.Result {
+	return DefaultDiscoverer.Get(app, path, headers...)
+}
+
+// Post 发起 POST 请求 (使用默认发现实例)
+func Post(app, path string, data any, headers ...string) *gohttp.Result {
+	return DefaultDiscoverer.Post(app, path, data, headers...)
+}
+
+// SetLoadBalancer 设置负载均衡策略 (使用默认发现实例)
+func SetLoadBalancer(lb LoadBalancer) {
+	DefaultDiscoverer.SetLoadBalancer(lb)
+}
+
+// SetRoute 设置路由策略 (使用默认发现实例)
+func SetRoute(route func(*AppClient, *http.Request)) {
+	DefaultDiscoverer.SetRoute(route)
 }
 
 
