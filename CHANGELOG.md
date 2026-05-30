@@ -1,5 +1,13 @@
 # CHANGELOG
 
+## v1.3.3 (2026-05-31)
+- **新增**: 深度集成 `jsmod`。
+  - 提供 `get`, `post`, `put`, `delete`, `head`, `do`, `open` 等微服务调用能力。
+  - 提供 `from(r)` 支持微服务间的链路透传 (Context Propagation)。
+  - 导出微服务相关的 `header` 常量。
+- **安全增强**: 封装 `jsResult` 以屏蔽敏感的 `Save()` 方法，确保微服务响应处理符合沙箱规范。
+- **管控**: 定义 `setNode`, `setLoadBalancer`, `setRoute`, `addExternalApp` 为 `unsafe` 方法。
+
 ## v1.0.10 (2026-05-09)
 - **API Redesign (Elegant API)**:
   - 引入包级泛型便捷调用：`Get[T]`, `Post[T]`, `Put[T]`, `Delete[T]`。
