@@ -9,7 +9,7 @@ import (
 
 func init() {
 	jsmod.Register("discover", map[string]any{
-		// RPC 调用 (默认实例)
+		// RPC 调用 (消费默认实例)
 		"get": func(app, path string, headers ...string) *jsResult {
 			return wrapResult(Get(app, path, headers...))
 		},
@@ -22,41 +22,12 @@ func init() {
 		"delete": func(app, path string, data any, headers ...string) *jsResult {
 			return wrapResult(DefaultDiscoverer.Delete(app, path, data, headers...))
 		},
-		"head": func(app, path string, headers ...string) *jsResult {
-			return wrapResult(DefaultDiscoverer.Head(app, path, headers...))
-		},
-		"do": func(method, app, path string, data any, headers ...string) *jsResult {
-			return wrapResult(DefaultDiscoverer.Do(method, app, path, data, headers...))
-		},
-		"open": func(app, path string, headers ...string) any {
-			return DefaultDiscoverer.Open(app, path, headers...)
-		},
 
 		// 链路透传
 		"from": func(r *http.Request) *jsCaller {
 			return &jsCaller{c: DefaultDiscoverer.From(r)}
 		},
-
-		// 状态获取
-		"getAppNodes": func(app string) map[string]*NodeInfo {
-			return DefaultDiscoverer.GetAppNodes(app)
-		},
-
-		// Header 常量
-		"headerFromApp":          HeaderFromApp,
-		"headerFromNode":         HeaderFromNode,
-		"headerClientIP":         HeaderClientIP,
-		"headerForwardedFor":     HeaderForwardedFor,
-		"headerUserID":           HeaderUserID,
-		"headerDeviceID":         HeaderDeviceID,
-		"headerClientAppName":    HeaderClientAppName,
-		"headerClientAppVersion": HeaderClientAppVersion,
-		"headerSessionID":        HeaderSessionID,
-		"headerRequestID":        HeaderRequestID,
-		"headerHost":             HeaderHost,
-		"headerScheme":           HeaderScheme,
-		"headerUserAgent":        HeaderUserAgent,
-	}, "setNode", "setLoadBalancer", "setRoute", "addExternalApp")
+	})
 }
 
 // jsResult 包装 *gohttp.Result 以隐藏 Save() 等危险方法
@@ -105,13 +76,4 @@ func (jc *jsCaller) Put(app, path string, data any, headers ...string) *jsResult
 }
 func (jc *jsCaller) Delete(app, path string, data any, headers ...string) *jsResult {
 	return wrapResult(jc.c.Delete(app, path, data, headers...))
-}
-func (jc *jsCaller) Head(app, path string, headers ...string) *jsResult {
-	return wrapResult(jc.c.Head(app, path, headers...))
-}
-func (jc *jsCaller) Do(method, app, path string, data any, headers ...string) *jsResult {
-	return wrapResult(jc.c.Do(method, app, path, data, headers...))
-}
-func (jc *jsCaller) Open(app, path string, headers ...string) any {
-	return jc.c.Open(app, path, headers...)
 }

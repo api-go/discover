@@ -1,12 +1,10 @@
 # CHANGELOG
 
+## v1.3.4 (2026-05-31)
+- **重构**: 精简 JS API 导出。移除所有管理类 API（`setNode`, `setLoadBalancer` 等）及 Header 常量。
+- **定位**: JS 侧仅作为微服务能力的消费者，不参与服务发现的元数据维护。
+
 ## v1.3.3 (2026-05-31)
-- **新增**: 深度集成 `jsmod`。
-  - 提供 `get`, `post`, `put`, `delete`, `head`, `do`, `open` 等微服务调用能力。
-  - 提供 `from(r)` 支持微服务间的链路透传 (Context Propagation)。
-  - 导出微服务相关的 `header` 常量。
-- **安全增强**: 封装 `jsResult` 以屏蔽敏感的 `Save()` 方法，确保微服务响应处理符合沙箱规范。
-- **管控**: 定义 `setNode`, `setLoadBalancer`, `setRoute`, `addExternalApp` 为 `unsafe` 方法。
 
 ## v1.0.10 (2026-05-09)
 - **API Redesign (Elegant API)**:
