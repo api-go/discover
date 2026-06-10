@@ -9,28 +9,39 @@ import (
 
 func init() {
 	jsmod.Register("discover", map[string]any{
-		// RPC 调用 (消费默认实例)
-		"get": func(app, path string, headers ...string) *jsResult {
-			return wrapResult(Get(app, path, headers...))
+		// RPC 调用 (全大写对齐 HTTP)
+		"GET": func(app, path string, headers map[string]string) *jsResult {
+			return wrapResult(Get(app, path, flattenHeaders(headers)...))
 		},
-		"post": func(app, path string, data any, headers ...string) *jsResult {
-			return wrapResult(Post(app, path, data, headers...))
+		"POST": func(app, path string, data any, headers map[string]string) *jsResult {
+			return wrapResult(Post(app, path, data, flattenHeaders(headers)...))
 		},
-		"put": func(app, path string, data any, headers ...string) *jsResult {
-			return wrapResult(DefaultDiscoverer.Put(app, path, data, headers...))
+		"PUT": func(app, path string, data any, headers map[string]string) *jsResult {
+			return wrapResult(DefaultDiscoverer.Put(app, path, data, flattenHeaders(headers)...))
 		},
-		"delete": func(app, path string, data any, headers ...string) *jsResult {
-			return wrapResult(DefaultDiscoverer.Delete(app, path, data, headers...))
+		"DELETE": func(app, path string, data any, headers map[string]string) *jsResult {
+			return wrapResult(DefaultDiscoverer.Delete(app, path, data, flattenHeaders(headers)...))
 		},
 
 		// 链路透传
-		"from": func(r *http.Request) *jsCaller {
+		"From": func(r *http.Request) *jsCaller {
 			return &jsCaller{c: DefaultDiscoverer.From(r)}
 		},
 	})
 }
 
-// jsResult 包装 *gohttp.Result 以隐藏 Save() 等危险方法
+func flattenHeaders(m map[string]string) []string {
+	if len(m) == 0 {
+		return nil
+	}
+	res := make([]string, 0, len(m)*2)
+	for k, v := range m {
+		res = append(res, k, v)
+	}
+	return res
+}
+
+// jsResult 包装 *gohttp.Result 以对齐 PascalCase
 type jsResult struct {
 	r *gohttp.Result
 }
@@ -39,14 +50,10 @@ func wrapResult(r *gohttp.Result) *jsResult {
 	return &jsResult{r: r}
 }
 
-func (jr *jsResult) String() string { return jr.r.String() }
-func (jr *jsResult) Bytes() []byte  { return jr.r.Bytes() }
-func (jr *jsResult) Map() map[string]any {
-	return jr.r.Map()
-}
-func (jr *jsResult) Slice() []any {
-	return jr.r.Slice()
-}
+func (jr *jsResult) String() string      { return jr.r.String() }
+func (jr *jsResult) Bytes() []byte       { return jr.r.Bytes() }
+func (jr *jsResult) Map() map[string]any { return jr.r.Map() }
+func (jr *jsResult) Slice() []any        { return jr.r.Slice() }
 func (jr *jsResult) Status() int {
 	if jr.r.Response != nil {
 		return jr.r.Response.StatusCode
@@ -60,20 +67,20 @@ func (jr *jsResult) Error() string {
 	return ""
 }
 
-// jsCaller 包装 *Caller 以确保返回包装后的结果
+// jsCaller 包装 *Caller 以对齐全大写方法
 type jsCaller struct {
 	c *Caller
 }
 
-func (jc *jsCaller) Get(app, path string, headers ...string) *jsResult {
-	return wrapResult(jc.c.Get(app, path, headers...))
+func (jc *jsCaller) GET(app, path string, headers map[string]string) *jsResult {
+	return wrapResult(jc.c.Get(app, path, flattenHeaders(headers)...))
 }
-func (jc *jsCaller) Post(app, path string, data any, headers ...string) *jsResult {
-	return wrapResult(jc.c.Post(app, path, data, headers...))
+func (jc *jsCaller) POST(app, path string, data any, headers map[string]string) *jsResult {
+	return wrapResult(jc.c.Post(app, path, data, flattenHeaders(headers)...))
 }
-func (jc *jsCaller) Put(app, path string, data any, headers ...string) *jsResult {
-	return wrapResult(jc.c.Put(app, path, data, headers...))
+func (jc *jsCaller) PUT(app, path string, data any, headers map[string]string) *jsResult {
+	return wrapResult(jc.c.Put(app, path, data, flattenHeaders(headers)...))
 }
-func (jc *jsCaller) Delete(app, path string, data any, headers ...string) *jsResult {
-	return wrapResult(jc.c.Delete(app, path, data, headers...))
+func (jc *jsCaller) DELETE(app, path string, data any, headers map[string]string) *jsResult {
+	return wrapResult(jc.c.Delete(app, path, data, flattenHeaders(headers)...))
 }

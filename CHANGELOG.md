@@ -1,5 +1,8 @@
 # CHANGELOG
 
+## v1.5.1 (2026-06-08)
+- **JS 对齐**: HTTP/RPC 方法名统一更正为全大写（`GET`, `POST`, `PUT`, `DELETE`），且 Headers 参数从变长字符串改为 `map[string]string` 对象。
+
 ## v1.3.4 (2026-05-31)
 - **重构**: 精简 JS API 导出。移除所有管理类 API（`setNode`, `setLoadBalancer` 等）及 Header 常量。
 - **定位**: JS 侧仅作为微服务能力的消费者，不参与服务发现的元数据维护。
