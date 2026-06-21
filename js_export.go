@@ -10,24 +10,34 @@ import (
 func init() {
 	jsmod.Register("discover", map[string]any{
 		// RPC 调用 (全大写对齐 HTTP)
-		"GET": func(app, path string, headers map[string]string) *jsResult {
-			return wrapResult(Get(app, path, flattenHeaders(headers)...))
-		},
-		"POST": func(app, path string, data any, headers map[string]string) *jsResult {
-			return wrapResult(Post(app, path, data, flattenHeaders(headers)...))
-		},
-		"PUT": func(app, path string, data any, headers map[string]string) *jsResult {
-			return wrapResult(DefaultDiscoverer.Put(app, path, data, flattenHeaders(headers)...))
-		},
-		"DELETE": func(app, path string, data any, headers map[string]string) *jsResult {
-			return wrapResult(DefaultDiscoverer.Delete(app, path, data, flattenHeaders(headers)...))
-		},
+		"GET":    jsGet,
+		"POST":   jsPost,
+		"PUT":    jsPut,
+		"DELETE": jsDelete,
 
 		// 链路透传
-		"From": func(r *http.Request) *jsCaller {
-			return &jsCaller{c: DefaultDiscoverer.From(r)}
-		},
+		"From": jsFrom,
 	})
+}
+
+func jsGet(app, path string, headers map[string]string) *jsResult {
+	return wrapResult(Get(app, path, flattenHeaders(headers)...))
+}
+
+func jsPost(app, path string, data any, headers map[string]string) *jsResult {
+	return wrapResult(Post(app, path, data, flattenHeaders(headers)...))
+}
+
+func jsPut(app, path string, data any, headers map[string]string) *jsResult {
+	return wrapResult(DefaultDiscoverer.Put(app, path, data, flattenHeaders(headers)...))
+}
+
+func jsDelete(app, path string, data any, headers map[string]string) *jsResult {
+	return wrapResult(DefaultDiscoverer.Delete(app, path, data, flattenHeaders(headers)...))
+}
+
+func jsFrom(r *http.Request) *jsCaller {
+	return &jsCaller{c: DefaultDiscoverer.From(r)}
 }
 
 func flattenHeaders(m map[string]string) []string {
@@ -47,6 +57,9 @@ type jsResult struct {
 }
 
 func wrapResult(r *gohttp.Result) *jsResult {
+	if r != nil && r.Error != nil {
+		r.Error = jsmod.MakeError(r.Error)
+	}
 	return &jsResult{r: r}
 }
 

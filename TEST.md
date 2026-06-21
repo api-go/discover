@@ -15,5 +15,5 @@
 ## Benchmarks
 - **BenchmarkDiscover**: ~500 ns/op (Core node selection and load balancing logic)
 
-> Date: 2026-05-05
+> Date: 2026-06-21
 > Environment: Darwin / Intel(R) Core(TM) i9-9980HK CPU @ 2.40GHz
