@@ -1,5 +1,8 @@
 # CHANGELOG
 
+## v1.5.5 (2026-06-22)
+- **Redis 兼容**: 将已废弃的 `SETEX` 命令替换为 `SET key value EX seconds` 格式。
+
 ## v1.5.3 (2026-06-21)
 - **错误堆栈重构**:
   - 重构 `js_export.go`，将匿名函数改写为包级具名函数。

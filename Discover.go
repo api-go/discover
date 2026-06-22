@@ -114,7 +114,7 @@ func Start(registry, app, addr string, logger *log.Logger, confs ...Config) *Dis
 
 		// 注册节点
 		if d.serverRedisPool.Do("HSET", d.app, addr, d.config.Weight).Error == nil {
-			d.serverRedisPool.Do("SETEX", d.app+"_"+addr, 10, "1")
+			d.serverRedisPool.Do("SET", d.app+"_"+addr, "1", "EX", 10)
 			d.logInfo("registered")
 			d.serverRedisPool.PUBLISH("CH_"+d.app, fmt.Sprintf("%s %d", addr, d.config.Weight))
 			d.daemonRunning.Store(true)
@@ -198,11 +198,11 @@ func (d *Discoverer) daemon() {
 				if !d.serverRedisPool.Do("HEXISTS", d.app, d.myAddr).Bool() {
 					d.logInfo("lost app registered info, re-registering")
 					if d.serverRedisPool.Do("HSET", d.app, d.myAddr, d.config.Weight).Error == nil {
-						d.serverRedisPool.Do("SETEX", d.app+"_"+d.myAddr, 10, "1")
+						d.serverRedisPool.Do("SET", d.app+"_"+d.myAddr, "1", "EX", 10)
 						d.serverRedisPool.PUBLISH("CH_"+d.app, fmt.Sprintf("%s %d", d.myAddr, d.config.Weight))
 					}
 				} else {
-					d.serverRedisPool.Do("SETEX", d.app+"_"+d.myAddr, 10, "1")
+					d.serverRedisPool.Do("SET", d.app+"_"+d.myAddr, "1", "EX", 10)
 				}
 			}
 		case <-d.daemonStopSignal:
