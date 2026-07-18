@@ -34,11 +34,16 @@ discover:
 
 ### 手动管理
 - `AddExternalApp(app, callConf string)`: 手动添加需要发现的外部应用。
+- `GetAppNodes(app string)`: 获取应用当前可用节点。
 - `SetNode(app, addr string, weight int)`: 手动设置某个服务的节点信息。
+- `Init / Start / Stop / Wait`: 管理发现服务生命周期。
+- `IsClient / IsServer`: 判断当前运行角色。
+- `SetLogger(logger)`: 设置模块日志器。
 
 ### 负载均衡与路由
 - `SetLoadBalancer(lb LoadBalancer)`: 自定义全局负载均衡策略。
 - `SetRoute(route func(ac *AppClient, r *http.Request))`: 设置全局路由拦截规则。
+- `Caller.DoWithNode / ManualDoWithNode`: 指定或返回实际调用节点。
 
 ## 环境变量
 - `DISCOVER_REGISTRY`: 注册中心地址。
