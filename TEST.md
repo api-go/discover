@@ -11,6 +11,7 @@
   - `TestDiscover`: PASS
   - `TestEasyStart`: PASS
 - **Module Graph**: `go list -m all` 通过，不再出现 checksum mismatch。
+- **v1.5.7 Module Graph**: 使用 `redis v1.5.11` 与 `redigo v1.9.3`，不再包含撤回版本。
 
 ## Benchmark
 - 待补充（Discover 主要性能开销在负载均衡算法选择，单次选择耗时极低）。
