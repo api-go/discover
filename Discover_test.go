@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"apigo.cc/go/discover"
 	"apigo.cc/go/redis"
+	"github.com/gorilla/websocket"
 )
 
 func TestDiscover(t *testing.T) {
@@ -24,7 +24,7 @@ func TestDiscover(t *testing.T) {
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("OK"))
 	})
-	
+
 	upgrader := websocket.Upgrader{}
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
@@ -48,7 +48,7 @@ func TestDiscover(t *testing.T) {
 	// 配置 Discover
 	discover.Config.App = "test-app"
 	discover.Config.Registry = "redis://127.0.0.1:6379/15"
-	
+
 	// 启动 Discover
 	if !discover.Start("127.0.0.1:18001") {
 		t.Skip("failed to start discover (check redis), skipping test")
@@ -58,7 +58,7 @@ func TestDiscover(t *testing.T) {
 
 	// 添加外部应用调用配置
 	discover.AddExternalApp("test-app", "1")
-	
+
 	// 等待节点同步
 	success := false
 	for i := 0; i < 20; i++ {
@@ -94,7 +94,7 @@ func TestDiscover(t *testing.T) {
 	if err := wsConn.WriteMessage(websocket.TextMessage, msg); err != nil {
 		t.Fatalf("ws write failed: %v", err)
 	}
-	
+
 	_, reply, err := wsConn.ReadMessage()
 	if err != nil {
 		t.Fatalf("ws read failed: %v", err)
@@ -108,7 +108,7 @@ func TestDiscover(t *testing.T) {
 	if rd.Error == nil {
 		// 模拟发现新节点
 		rd.PUBLISH("CH_test-app", "127.0.0.1:18002 100")
-		
+
 		success = false
 		for i := 0; i < 20; i++ {
 			nodes := discover.GetAppNodes("test-app")
@@ -129,7 +129,7 @@ func TestEasyStart(t *testing.T) {
 	_ = os.Setenv("DISCOVER_APP", "test-app")
 	_ = os.Setenv("DISCOVER_LISTEN", "18003")
 	_ = os.Setenv("DISCOVER_REGISTRY", "redis://127.0.0.1:6379/15")
-	
+
 	ip, port := discover.EasyStart()
 	if ip == "" || port == 0 {
 		t.Skip("EasyStart failed (check redis), skipping test")
@@ -137,4 +137,20 @@ func TestEasyStart(t *testing.T) {
 	}
 	fmt.Printf("EasyStart: %s:%d\n", ip, port)
 	discover.Stop()
+}
+
+func BenchmarkDefaultLoadBalancer(b *testing.B) {
+	loadBalancer := &discover.DefaultLoadBalancer{}
+	appClient := &discover.AppClient{}
+	nodes := []*discover.NodeInfo{
+		{Addr: "127.0.0.1:18001", Weight: 100},
+		{Addr: "127.0.0.1:18002", Weight: 200},
+		{Addr: "127.0.0.1:18003", Weight: 300},
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		loadBalancer.Next(appClient, nodes, nil)
+	}
 }

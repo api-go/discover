@@ -21,6 +21,13 @@ discover:
 
 ## API 指南
 
+### 全局配置
+- `Config.Registry / App / Weight`: 注册中心、当前应用名与节点权重。
+- `Config.Calls`: 被调用应用及调用配置。
+- `Config.CallRetryTimes`: 单次调用的最大节点尝试次数。
+- `Config.IpPrefix`: `EasyStart` 选择监听地址时使用的 IP 前缀。
+- `RelayHeaders`: 跨服务调用时自动透传的 Header 列表。
+
 ### 初始化与启动
 - `Start(addr string) bool`: 启动服务发现，指定当前节点的外部访问地址。
 - `EasyStart() (string, int)`: 自动监听可用端口并启动服务发现。返回 IP 和端口。
@@ -42,6 +49,9 @@ discover:
 
 ### 负载均衡与路由
 - `SetLoadBalancer(lb LoadBalancer)`: 自定义全局负载均衡策略。
+- `LoadBalancer.Next`: 从可用节点中选择本次调用节点。
+- `LoadBalancer.Response`: 请求完成后更新节点状态或统计信息。
+- `DefaultLoadBalancer`: 内置的权重得分负载均衡实现。
 - `SetRoute(route func(ac *AppClient, r *http.Request))`: 设置全局路由拦截规则。
 - `Caller.DoWithNode / ManualDoWithNode`: 指定或返回实际调用节点。
 

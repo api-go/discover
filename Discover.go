@@ -96,8 +96,8 @@ func Start(addr string) bool {
 		}
 
 		// 注册节点
-		if serverRedisPool.Do("HSET", Config.App, addr, Config.Weight).Error == nil {
-			serverRedisPool.Do("SETEX", Config.App+"_"+addr, 10, "1")
+		if serverRedisPool.HSET(Config.App, addr, Config.Weight) {
+			serverRedisPool.SETEX(Config.App+"_"+addr, 10, "1")
 			logInfo("registered")
 			serverRedisPool.PUBLISH("CH_"+Config.App, fmt.Sprintf("%s %d", addr, Config.Weight))
 			daemonRunning = true
@@ -132,14 +132,14 @@ func daemon() {
 		}
 
 		if isServer && serverRedisPool != nil {
-			if !serverRedisPool.Do("HEXISTS", Config.App, myAddr).Bool() {
+			if !serverRedisPool.HEXISTS(Config.App, myAddr) {
 				logInfo("lost app registered info, re-registering")
-				if serverRedisPool.Do("HSET", Config.App, myAddr, Config.Weight).Error == nil {
-					serverRedisPool.Do("SETEX", Config.App+"_"+myAddr, 10, "1")
+				if serverRedisPool.HSET(Config.App, myAddr, Config.Weight) {
+					serverRedisPool.SETEX(Config.App+"_"+myAddr, 10, "1")
 					serverRedisPool.PUBLISH("CH_"+Config.App, fmt.Sprintf("%s %d", myAddr, Config.Weight))
 				}
 			} else {
-				serverRedisPool.Do("SETEX", Config.App+"_"+myAddr, 10, "1")
+				serverRedisPool.SETEX(Config.App+"_"+myAddr, 10, "1")
 			}
 		}
 	}
@@ -201,8 +201,8 @@ func Stop() {
 	if isServer {
 		daemonRunning = false
 		if serverRedisPool != nil {
-			serverRedisPool.Do("HDEL", Config.App, myAddr)
-			serverRedisPool.Do("DEL", Config.App+"_"+myAddr)
+			serverRedisPool.HDEL(Config.App, myAddr)
+			serverRedisPool.DEL(Config.App + "_" + myAddr)
 			serverRedisPool.PUBLISH("CH_"+Config.App, fmt.Sprintf("%s %d", myAddr, 0))
 		}
 		isServer = false
@@ -360,12 +360,12 @@ func fetchApp(app string) {
 		return
 	}
 
-	results := pool.Do("HGETALL", app).ResultMap()
-	
+	results := pool.HGETALL(app)
+
 	// 检查存活
 	for addr := range results {
-		if !pool.Do("EXISTS", app+"_"+addr).Bool() {
-			pool.Do("HDEL", app, addr)
+		if !pool.EXISTS(app + "_" + addr) {
+			pool.HDEL(app, addr)
 			delete(results, addr)
 		}
 	}
