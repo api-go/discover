@@ -16,7 +16,7 @@ require (
 	apigo.cc/go/crypto v1.5.5 // indirect
 	apigo.cc/go/encoding v1.5.6 // indirect
 	apigo.cc/go/file v1.5.6 // indirect
-	apigo.cc/go/jsmod v1.5.3 // indirect
+	apigo.cc/go/jsmod v1.5.4 // indirect
 	apigo.cc/go/rand v1.5.4 // indirect
 	apigo.cc/go/safe v1.5.3 // indirect
 	apigo.cc/go/shell v1.5.6 // indirect
