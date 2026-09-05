@@ -12,7 +12,7 @@
   - `TestDiscover`: PASS
   - `TestEasyStart`: PASS
 - **Module Graph**: `go list -m all` 通过，不再出现 checksum mismatch。
-- **v1.5.7 Module Graph**: 使用 `redis v1.5.11` 与 `redigo v1.9.3`，不再包含撤回版本。
+- **v1.5.11 Module Graph**: 使用 `redis v1.5.11` 与 `redigo v1.9.3`，不再包含撤回版本。
 - **v1.5.8 Module Graph**: `apigo.cc/go/*` 基础依赖已对齐模块索引中的当前 patch 版本。
 - **v1.5.9 Module Graph**: `log v1.5.11`、`redis v1.5.12` 与 `shell v1.5.6` 通过依赖审计。
 
