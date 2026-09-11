@@ -1,5 +1,8 @@
 # CHANGELOG
 
+## [v1.5.14] - 2026-09-12
+- **测试隔离**: Redis 服务发现集成测试改为通过 `DISCOVER_REDIS_INTEGRATION=1` 显式启用。
+
 ## [v1.5.12] - 2026-09-05
 - **依赖对齐**: 补齐 `config`、`file`、`http`、`log` 与 `redis` 的级联版本。
 

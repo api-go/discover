@@ -1,5 +1,9 @@
 # Test Report
 
+## v1.5.14 验证
+- Redis 集成场景通过 `DISCOVER_REDIS_INTEGRATION=1` 显式启用，默认测试不依赖外部 Redis。
+- `go test -v ./...` 与 `go test -bench=. ./...` 通过。
+
 ## 测试场景
 1. **基础发现与调用**: 验证服务启动后能自动注册到 Redis，并能通过 Caller 正确发起请求。
 2. **实时同步**: 验证通过 Redis PUBLISH 更新节点信息后，客户端能实时感知并更新本地节点列表。

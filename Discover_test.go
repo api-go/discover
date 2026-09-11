@@ -14,6 +14,9 @@ import (
 )
 
 func TestDiscover(t *testing.T) {
+	if os.Getenv("DISCOVER_REDIS_INTEGRATION") != "1" {
+		t.Skip("set DISCOVER_REDIS_INTEGRATION=1 to run the Redis integration test")
+	}
 	// 启动一个模拟服务
 	l, err := net.Listen("tcp", "127.0.0.1:18001")
 	if err != nil {
@@ -125,6 +128,9 @@ func TestDiscover(t *testing.T) {
 }
 
 func TestEasyStart(t *testing.T) {
+	if os.Getenv("DISCOVER_REDIS_INTEGRATION") != "1" {
+		t.Skip("set DISCOVER_REDIS_INTEGRATION=1 to run the Redis integration test")
+	}
 	// 模拟环境变量
 	_ = os.Setenv("DISCOVER_APP", "test-app")
 	_ = os.Setenv("DISCOVER_LISTEN", "18003")
