@@ -25,16 +25,17 @@ var (
 	pubsubRedisPool *redis.Redis
 	isServer        = false
 	isClient        = false
-	daemonRunning   = false
 	myAddr          = ""
 	_logger         = log.DefaultLogger
 	_inited         = false
 
-	daemonStopChan chan bool
-	appLock        sync.RWMutex
-	_calls         = map[string]*callInfoType{}
-	_appNodes      = map[string]map[string]*NodeInfo{}
-	appSubscribed  = map[string]bool{}
+	lifecycleLock sync.Mutex
+	heartbeatStop chan struct{}
+	heartbeatDone chan struct{}
+	appLock       sync.RWMutex
+	_calls        = map[string]*callInfoType{}
+	_appNodes     = map[string]map[string]*NodeInfo{}
+	appSubscribed = map[string]bool{}
 
 	settedRoute        func(*AppClient, *http.Request) = nil
 	settedLoadBalancer LoadBalancer                    = &DefaultLoadBalancer{}
@@ -47,8 +48,8 @@ type callInfoType struct {
 	SSL         bool
 }
 
-func IsServer() bool { return isServer }
-func IsClient() bool { return isClient }
+func IsServer() bool { appLock.RLock(); defer appLock.RUnlock(); return isServer }
+func IsClient() bool { appLock.RLock(); defer appLock.RUnlock(); return isClient }
 
 func logError(error string, extra ...any) {
 	_logger.Error("Discover: "+error, append(extra, "app", Config.App, "addr", myAddr)...)
@@ -85,7 +86,11 @@ func Init() {
 }
 
 func Start(addr string) bool {
+	lifecycleLock.Lock()
+	defer lifecycleLock.Unlock()
 	Init()
+	stopHeartbeat()
+	appLock.Lock()
 	myAddr = addr
 
 	isServer = Config.App != "" && Config.Weight > 0
@@ -100,14 +105,15 @@ func Start(addr string) bool {
 			serverRedisPool.SETEX(Config.App+"_"+addr, 10, "1")
 			logInfo("registered")
 			serverRedisPool.PUBLISH("CH_"+Config.App, fmt.Sprintf("%s %d", addr, Config.Weight))
-			daemonRunning = true
-			daemonStopChan = make(chan bool)
-			go daemon()
+			heartbeatStop = make(chan struct{})
+			heartbeatDone = make(chan struct{})
+			go daemon(heartbeatStop, heartbeatDone, serverRedisPool, Config.App, addr, Config.Weight, _logger)
 		} else {
 			logError("register failed")
 		}
 	}
 
+	appLock.Unlock()
 	calls := getCalls()
 	if len(calls) > 0 {
 		for app, conf := range calls {
@@ -120,32 +126,47 @@ func Start(addr string) bool {
 	return true
 }
 
-func daemon() {
-	logInfo("daemon thread started")
+// stopHeartbeat is called with lifecycleLock held; channel close wakes the loop immediately.
+func stopHeartbeat() {
+	appLock.Lock()
+	if heartbeatStop != nil {
+		close(heartbeatStop)
+		heartbeatStop = nil
+	}
+	done := heartbeatDone
+	appLock.Unlock()
+	if done != nil {
+		<-done
+	}
+}
+
+func daemon(stop <-chan struct{}, done chan struct{}, pool *redis.Redis, app, addr string, weight int, logger *log.Logger) {
+	defer close(done)
+	logger.Info("Discover: daemon thread started", "app", app, "addr", addr)
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
-
-	for daemonRunning {
-		<-ticker.C
-		if !daemonRunning {
-			break
-		}
-
-		if isServer && serverRedisPool != nil {
-			if !serverRedisPool.HEXISTS(Config.App, myAddr) {
-				logInfo("lost app registered info, re-registering")
-				if serverRedisPool.HSET(Config.App, myAddr, Config.Weight) {
-					serverRedisPool.SETEX(Config.App+"_"+myAddr, 10, "1")
-					serverRedisPool.PUBLISH("CH_"+Config.App, fmt.Sprintf("%s %d", myAddr, Config.Weight))
+	for {
+		select {
+		case <-stop:
+			logger.Info("Discover: daemon thread stopped", "app", app, "addr", addr)
+			return
+		case <-ticker.C:
+			// A stop concurrent with the tick must be observed before another heartbeat.
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if !pool.HEXISTS(app, addr) {
+				logger.Info("Discover: lost app registered info, re-registering", "app", app, "addr", addr)
+				if pool.HSET(app, addr, weight) {
+					pool.SETEX(app+"_"+addr, 10, "1")
+					pool.PUBLISH("CH_"+app, fmt.Sprintf("%s %d", addr, weight))
 				}
 			} else {
-				serverRedisPool.SETEX(Config.App+"_"+myAddr, 10, "1")
+				pool.SETEX(app+"_"+addr, 10, "1")
 			}
 		}
-	}
-	logInfo("daemon thread stopped")
-	if daemonStopChan != nil {
-		daemonStopChan <- true
 	}
 }
 
@@ -192,6 +213,9 @@ func subscribeAppUnderLock(app string) {
 }
 
 func Stop() {
+	lifecycleLock.Lock()
+	defer lifecycleLock.Unlock()
+	stopHeartbeat()
 	appLock.Lock()
 	if isClient && pubsubRedisPool != nil {
 		pubsubRedisPool.Stop()
@@ -199,7 +223,6 @@ func Stop() {
 	}
 
 	if isServer {
-		daemonRunning = false
 		if serverRedisPool != nil {
 			serverRedisPool.HDEL(Config.App, myAddr)
 			serverRedisPool.DEL(Config.App + "_" + myAddr)
@@ -211,9 +234,11 @@ func Stop() {
 }
 
 func Wait() {
-	if daemonStopChan != nil {
-		<-daemonStopChan
-		daemonStopChan = nil
+	appLock.RLock()
+	done := heartbeatDone
+	appLock.RUnlock()
+	if done != nil {
+		<-done
 	}
 }
 

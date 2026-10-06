@@ -4,11 +4,11 @@ go 1.25.0
 
 require (
 	apigo.cc/go/cast v1.5.7
-	apigo.cc/go/config v1.5.7
-	apigo.cc/go/http v1.5.9
+	apigo.cc/go/config v1.5.8
+	apigo.cc/go/http v1.5.10
 	apigo.cc/go/id v1.5.9
 	apigo.cc/go/log v1.5.15
-	apigo.cc/go/redis v1.5.17
+	apigo.cc/go/redis v1.5.18
 	github.com/gorilla/websocket v1.5.3
 )
 

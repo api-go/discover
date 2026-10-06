@@ -1,5 +1,10 @@
 # Test Report
 
+## v1.5.15 发布验证（2026-10-06）
+- 普通测试、benchmark 与启用 Redis 的完整 race 检查通过。
+- `TestHeartbeatStopWaitAndRestart` 覆盖 20 轮启动/停止、重复 Start、3 个并发 Wait、重复 Wait 与注销结果；无定时 sleep。
+- `BenchmarkDefaultLoadBalancer`: 31.84 ns/op，0 B/op，0 allocs/op（Apple M3 Max）。
+
 ## v1.5.14 验证
 - Redis 集成场景通过 `DISCOVER_REDIS_INTEGRATION=1` 显式启用，默认测试不依赖外部 Redis。
 - `go test -v ./...` 与 `go test -bench=. ./...` 通过。

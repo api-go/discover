@@ -31,7 +31,7 @@ discover:
 ### 初始化与启动
 - `Start(addr string) bool`: 启动服务发现，指定当前节点的外部访问地址。
 - `EasyStart() (string, int)`: 自动监听可用端口并启动服务发现。返回 IP 和端口。
-- `Stop()`: 停止服务并注销节点。
+- `Stop()`: 停止服务，等待正在进行的心跳退出后注销节点（v1.5.15）。
 
 ### 服务调用 (Caller)
 - `NewCaller(request *http.Request, logger *log.Logger) *Caller`: 创建调用器。传入原始请求可自动透传 Header。
@@ -43,7 +43,7 @@ discover:
 - `AddExternalApp(app, callConf string)`: 手动添加需要发现的外部应用。
 - `GetAppNodes(app string)`: 获取应用当前可用节点。
 - `SetNode(app, addr string, weight int)`: 手动设置某个服务的节点信息。
-- `Init / Start / Stop / Wait`: 管理发现服务生命周期。
+- `Init / Start / Stop / Wait`: 管理全局单实例生命周期；Start/Stop 串行，重复 Start 替换心跳循环，Wait 可重复调用或有多个等待者。Config/SetLogger 应在启动前设置，不提供任意并发配置写入的保证。
 - `IsClient / IsServer`: 判断当前运行角色。
 - `SetLogger(logger)`: 设置模块日志器。
 
