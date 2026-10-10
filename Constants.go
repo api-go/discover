@@ -1,10 +1,10 @@
 package discover
 
 const (
-	HeaderFromApp  = "X-Discover-From-App"
-	HeaderFromNode = "X-Discover-From-Node"
+	HeaderFromApp  = "X-From-App"
+	HeaderFromNode = "X-From-Node"
 
-	HeaderClientIp         = "X-Client-Ip"
+	HeaderClientIp         = "X-Real-IP"
 	HeaderForwardedFor     = "X-Forwarded-For"
 	HeaderUserId           = "X-User-Id"
 	HeaderDeviceId         = "X-Device-Id"
@@ -14,7 +14,7 @@ const (
 	HeaderRequestId        = "X-Request-Id"
 	HeaderHost             = "X-Host"
 	HeaderScheme           = "X-Scheme"
-	HeaderUserAgent        = "User-Agent"
+	HeaderUserAgent        = "X-User-Agent"
 )
 
 var RelayHeaders = []string{

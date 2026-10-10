@@ -27,3 +27,38 @@
 
 ## Benchmark
 - `BenchmarkDefaultLoadBalancer-16`: `32.35 ns/op`，`0 B/op`，`0 allocs/op`（Apple M3 Max）。
+
+## SDK 开发验证（2026-10-10，未发布）
+
+- `GOWORK=off go test -v ./...`：通过。
+- `DISCOVER_REDIS_INTEGRATION=1 GOWORK=off go test -race -v ./...`：通过；Redis 注册/订阅、停止/重启、并发调用、取消及流式响应所有权。
+- `GOWORK=off go test -bench=. ./...`：通过；DefaultLoadBalancer 15.19 ns/op、0 B/op、0 allocs/op（Apple M3 Max）。
+- 新增用例覆盖健康默认/自定义/405、原生/旧 Caller 的多值应用头、POST body 换节点重放、连续失败清零、501、并发、取消、本地非法 Header、节点超时、原生/旧流式应答在返回后可读。
+- API 核对：工具 getExports 未提供，使用 GOWORK=off go doc 与导出源码交叉核对。
+
+### 各语言与实际互通
+
+- Python 3.14：2 个 unittest 通过，包含 WSGI 延迟迭代时的认证上下文与请求 ID 隔离。
+- Node.js：npm test 通过，包含 POST 换节点、连续失败清零、501、Header、健康及 Redis 生命周期。
+- Java 17：Maven/JUnit 通过，包含同类 HTTP/健康用例及真实 Redis。
+- PHP 7.4：常驻/FPM 独立入口的 Redis/HTTP/H2C 验证通过；PHP/Ruby 源码语法检查通过，Composer manifest 验证通过。
+- 跨语言 runner：Python、Node.js、Java、PHP 的 HTTP/H2C/WS 到 Go 通过；Ruby HTTP/WS 到 Go 通过；Go 经 Redis 发现并调用 Python WSGI、Node.js、Java HttpExchange、Ruby Rack host、PHP Swoole 的固定健康路径通过。
+- runner 检查自身注册/注销和心跳清理，释放自己的进程及前缀键；没有停止用户已有 Redis。
+
+### 验证范围
+
+本轮没有执行 Redis 断线/进程故障注入、真实 FPM master、TLS/WSS 证书场景或 Spring/FastAPI/Laravel/Rails 自动生命周期装配验收。Ruby 默认 H2C/WSS 为明确不支持；非 Go ManualDoWithNode 流式对应接口尚未提供。详见 sdk/README.md 的能力表，不将这些场景标记通过。
+
+Service 入口集成已在仅 discover/service 的临时工作区通过完整 race、benchmark 及针对性元数据/健康检查；其 GOWORK=off 发布验证留到 Discover 发布并升级依赖后进行。发布及版本对齐尚未执行。
+
+## v1.5.16 发布验证（2026-10-10）
+
+- GOWORK=off go test -v ./... 与 go test -bench=. ./... 通过，依赖均为已发布 tag。
+- API 以 GOWORK=off go doc 与导出源码交叉核对（getExports 工具不可用）。
+- GOWORK=off go test -race ./... 通过。
+
+```text
+BenchmarkDefaultLoadBalancer-16    	79286206	        15.42 ns/op	       0 B/op	       0 allocs/op
+```
+
+- v1.5.16 依赖升级后重新运行 Python/Node.js/Java 测试及完整双向跨语言 runner，全部通过；本次仅发布 SDK 源码，真实 FPM/TLS 与具体框架装配仍为文档列明的后续范围。

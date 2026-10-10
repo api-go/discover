@@ -3,13 +3,14 @@ module apigo.cc/go/discover
 go 1.25.0
 
 require (
-	apigo.cc/go/cast v1.5.7
+	apigo.cc/go/cast v1.5.8
 	apigo.cc/go/config v1.5.8
-	apigo.cc/go/http v1.5.10
+	apigo.cc/go/http v1.5.11
 	apigo.cc/go/id v1.5.9
-	apigo.cc/go/log v1.5.15
-	apigo.cc/go/redis v1.5.18
+	apigo.cc/go/log v1.5.17
+	apigo.cc/go/redis v1.5.20
 	github.com/gorilla/websocket v1.5.3
+	golang.org/x/net v0.54.0
 )
 
 require (
@@ -22,7 +23,6 @@ require (
 	apigo.cc/go/shell v1.5.8 // indirect
 	github.com/gomodule/redigo v1.9.3 // indirect
 	golang.org/x/crypto v0.52.0 // indirect
-	golang.org/x/net v0.54.0 // indirect
 	golang.org/x/sys v0.45.0 // indirect
 	golang.org/x/text v0.37.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect

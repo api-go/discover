@@ -23,19 +23,21 @@ type LoadBalancer interface {
 type DefaultLoadBalancer struct{}
 
 func (lb *DefaultLoadBalancer) Response(appClient *AppClient, node *NodeInfo, err error, response *http.Response, responseTime time.Duration) {
-	node.Data.Store("score", float64(node.UsedTimes)/float64(node.Weight))
+	weight, used, _ := node.State()
+	if weight > 0 {
+		node.Data.Store("score", float64(used)/float64(weight))
+	}
 }
 
 func (lb *DefaultLoadBalancer) Next(appClient *AppClient, nodes []*NodeInfo, request *http.Request) *NodeInfo {
 	var minScore float64 = -1
 	var minNode *NodeInfo
 	for _, node := range nodes {
-		scoreValue, ok := node.Data.Load("score")
-		if !ok {
-			scoreValue = float64(node.UsedTimes) / float64(node.Weight)
-			node.Data.Store("score", scoreValue)
+		weight, used, _ := node.State()
+		if weight <= 0 {
+			continue
 		}
-		score := scoreValue.(float64)
+		score := float64(used) / float64(weight)
 		if minNode == nil || score < minScore {
 			minScore = score
 			minNode = node

@@ -1,1 +1,9 @@
 .log.meta.json
+
+# SDK build/test artifacts
+sdk/**/node_modules/
+sdk/**/target/
+sdk/**/__pycache__/
+sdk/**/*.egg-info/
+sdk/**/vendor/
+sdk/**/*.gem

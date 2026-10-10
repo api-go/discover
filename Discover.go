@@ -93,7 +93,7 @@ func Start(addr string) bool {
 	appLock.Lock()
 	myAddr = addr
 
-	isServer = Config.App != "" && Config.Weight > 0
+	isServer = Config.App != "" && Config.Weight > 0 && addr != ""
 	if isServer && Config.Registry != "" {
 		serverRedisPool = redis.GetRedis(Config.Registry, _logger)
 		if serverRedisPool.Error != nil {
@@ -182,15 +182,18 @@ func startSub() bool {
 
 	if pubsubRedisPool == nil {
 		pubsubRedisPool = redis.GetRedis(Config.Registry, _logger.New(id.MakeID(12)))
-		// 订阅所有已注册的应用
-		for app := range appSubscribed {
-			subscribeAppUnderLock(app)
-		}
-		// 必须在释放锁之前完成配置，但在释放锁之后启动，避免死锁
-		appLock.Unlock()
-		pubsubRedisPool.Start()
-		appLock.Lock()
 	}
+	if clientRedisPool.Error != nil || pubsubRedisPool.Error != nil {
+		appLock.Unlock()
+		return false
+	}
+	// Repeated Start after Stop must also restart the subscription lifecycle.
+	for app := range appSubscribed {
+		subscribeAppUnderLock(app)
+	}
+	appLock.Unlock()
+	pubsubRedisPool.Start()
+	appLock.Lock()
 
 	isClient = true
 	appLock.Unlock()
@@ -452,16 +455,21 @@ func pushNode(app, addr string, weight int) {
 	}
 
 	if node, ok := _appNodes[app][addr]; ok {
+		node.stateLock.Lock()
 		if node.Weight != weight {
 			node.UsedTimes = uint64(float64(node.UsedTimes) / float64(node.Weight) * float64(weight))
 			node.Weight = weight
 		}
+		node.stateLock.Unlock()
 	} else {
 		var avgUsed uint64 = 0
 		if len(_appNodes[app]) > 0 {
 			var totalScore float64
 			for _, n := range _appNodes[app] {
-				totalScore += float64(n.UsedTimes) / float64(n.Weight)
+				nodeWeight, used, _ := n.State()
+				if nodeWeight > 0 {
+					totalScore += float64(used) / float64(nodeWeight)
+				}
 			}
 			avgUsed = uint64(totalScore / float64(len(_appNodes[app])) * float64(weight))
 		}

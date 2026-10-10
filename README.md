@@ -24,7 +24,7 @@ discover:
 ### 全局配置
 - `Config.Registry / App / Weight`: 注册中心、当前应用名与节点权重。
 - `Config.Calls`: 被调用应用及调用配置。
-- `Config.CallRetryTimes`: 单次调用的最大节点尝试次数。
+- `Config.CallRetryTimes`: 节点连续失败摘除阈值；成功后清零。每次调用不重复尝试同一节点。
 - `Config.IpPrefix`: `EasyStart` 选择监听地址时使用的 IP 前缀。
 - `RelayHeaders`: 跨服务调用时自动透传的 Header 列表。
 
@@ -61,3 +61,21 @@ discover:
 - `DISCOVER_WEIGHT`: 节点权重。
 - `DISCOVER_CALLS`: 调用的应用定义。
 - `DISCOVER_LISTEN`: EasyStart 监听地址。
+
+## v1.5.16：多语言 SDK 与原生 HTTP 接入
+
+SDK 位于 `sdk/`，包括 Python、Node.js/TypeScript、Java、PHP 常驻、独立 PHP FPM 入口、Ruby；Go 直接使用本模块，无需 go/service。[接口对照与接入](sdk/README.md)、[共同协议](protocol/SDK.md)、[验收后版本联动](RELEASE-CHECKLIST.md)。
+
+- Header 统一为 X-Real-IP、X-From-App、X-From-Node、X-User-Agent；自动续传 X-App-*（大小写不敏感）。来源应用/节点按当前调用方覆盖。旧 X-Discover-From-* 不再输出；Service 随依赖升级统一读取这些字段。
+- `HealthPath`：GET /_discover/health，默认 200/OK。`HealthHandler()` 提供原生处理器，`SetHealthHandler(http.Handler)` 自定义应答，nil 恢复默认；`Middleware(next)` 挂载健康路径并补齐缺失的请求元数据；`PrepareRequest(r)` 供框架在解析可信 IP 后单独补齐。入口须自行处理代理信任和身份认证。
+- `Caller.DoRequest(app, *http.Request)` 返回原生 *http.Response、节点地址、error；URL 使用本地绝对路径，调用方负责关闭响应 Body。请求 body 有 GetBody 时可换节点重放，无 GetBody 的流只尝试一次。SetRoute 可修改原生调用元数据（App/Method/Path/Headers），原生 body 不通过 AppClient.Data 修改。
+- `SetHTTPClient(*http.Client)` 注入原生客户端，nil 恢复默认；SDK 不关闭外部提供的客户端。
+- `NodeInfo.State()` 返回并发安全的 weight/used/failed 快照；自定义负载均衡器使用 State，避免并发读写公开计数字段。
+- GET/POST 均对传输故障和 502–504 换节点；501 不重试。成功清零节点失败计数，达到连续失败阈值全局摘除，存活服务心跳可重注册。取消请求不代表节点失效；SDK 不保证业务只执行一次，幂等与原子状态迁移由应用负责。
+- 不新增 SDK/Gateway 主动巡检，调度/管理器负责检测与重建。
+
+本次发布已对齐 Log v1.5.17、HTTP v1.5.11 和 Redis v1.5.20；SDK 源码随 v1.5.16 tag 提供，未上传各语言包仓库。Service/Gateway 按已发布 tag 继续升级，均不新增下游主动检测。
+
+## v1.5.16 依赖基线
+
+本版本对齐 Log v1.5.17 与发布时模块索引中的上游已发布依赖；公开 API 保持兼容。

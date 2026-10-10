@@ -1,0 +1,17 @@
+{
+  "name": "@apigo/discover",
+  "version": "1.5.16",
+  "type": "module",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "redis": "^5.0.0",
+    "ws": "^8.18.0"
+  },
+  "scripts": {
+    "test": "node --test test.mjs"
+  }
+}

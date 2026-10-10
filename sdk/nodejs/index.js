@@ -1,0 +1,496 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import { createClient } from "redis";
+import http from "node:http";
+import https from "node:https";
+import http2 from "node:http2";
+import { randomUUID } from "node:crypto";
+import WebSocket from "ws";
+const requestStorage = new AsyncLocalStorage();
+export const healthPath = "/_discover/health";
+export const config = {
+  registry: "redis://127.0.0.1:6379/15",
+  app: "",
+  weight: 100,
+  calls: {},
+  callRetryTimes: 10,
+};
+const relay = new Set(
+  "x-real-ip x-forwarded-for x-user-id x-device-id x-client-app-name x-client-app-version x-session-id x-request-id x-host x-scheme x-user-agent".split(
+    " ",
+  ),
+);
+let heartbeat = Promise.resolve();
+let pool,
+  sub,
+  addr = "",
+  timer,
+  inited = false,
+  logger = console,
+  route,
+  lb,
+  health,
+  running = false;
+const nodes = new Map(),
+  calls = new Map(),
+  subscriptions = new Set();
+const agents = {
+  http: new http.Agent({ keepAlive: true }),
+  https: new https.Agent({ keepAlive: true }),
+};
+export function init() {
+  if (inited) return;
+  for (const [key, name] of Object.entries({
+    registry: "REGISTRY",
+    app: "APP",
+    weight: "WEIGHT",
+    calls: "CALLS",
+  })) {
+    const value = process.env["DISCOVER_" + name];
+    if (value !== undefined)
+      config[key] =
+        key === "calls"
+          ? JSON.parse(value)
+          : key === "weight"
+            ? Number(value)
+            : value;
+  }
+  inited = true;
+}
+export function configure(value) {
+  init();
+  Object.assign(config, value);
+}
+function parse(value = "") {
+  if (typeof value === "object")
+    return { timeout: 10000, httpVersion: 2, ssl: false, token: "", ...value };
+  const result = { timeout: 10000, httpVersion: 2, ssl: false, token: "" };
+  for (const part of value.split(":")) {
+    if (["1", "2"].includes(part)) result.httpVersion = Number(part);
+    else if (["s", "https"].includes(part)) {
+      result.ssl = true;
+      result.httpVersion = 2;
+    } else if (["http", "h2c"].includes(part)) {
+      result.ssl = false;
+      result.httpVersion = part === "http" ? 1 : 2;
+    } else if (/^\d+(ms|s)?$/.test(part))
+      result.timeout =
+        Number(part.replace(/ms|s$/, "")) * (part.endsWith("ms") ? 1 : 1000);
+    else if (part) result.token = part;
+  }
+  return result;
+}
+export function setNode(app, address, weight) {
+  if (!nodes.has(app)) nodes.set(app, new Map());
+  const values = nodes.get(app);
+  if (weight <= 0) values.delete(address);
+  else if (values.has(address)) values.get(address).weight = weight;
+  else
+    values.set(address, {
+      addr: address,
+      weight,
+      usedTimes: 0,
+      failedTimes: 0,
+    });
+}
+export function getAppNodes(app) {
+  return Object.fromEntries(
+    [...(nodes.get(app)?.entries() ?? [])].map(([key, value]) => [
+      key,
+      { ...value },
+    ]),
+  );
+}
+async function fetchApp(app) {
+  if (!pool) return;
+  const values = await pool.hGetAll(app);
+  const live = new Map();
+  for (const [address, weight] of Object.entries(values))
+    if (await pool.exists(app + "_" + address))
+      live.set(address, Number(weight));
+  for (const address of nodes.get(app)?.keys() ?? [])
+    if (!live.has(address)) setNode(app, address, 0);
+  for (const [address, weight] of live) setNode(app, address, weight);
+}
+export async function addExternalApp(app, callConf = "") {
+  calls.set(app, parse(callConf));
+  if (!nodes.has(app)) nodes.set(app, new Map());
+  if (sub && !subscriptions.has(app)) {
+    await sub.subscribe("CH_" + app, (message) => {
+      const parts = message.split(" ");
+      if (parts.length === 2 && Number.isFinite(Number(parts[1])))
+        setNode(app, parts[0], Number(parts[1]));
+    });
+    subscriptions.add(app);
+  }
+  await fetchApp(app);
+  return true;
+}
+async function register() {
+  if (!isServer()) return;
+  const app = config.app;
+  if (!(await pool.hExists(app, addr))) {
+    await pool.hSet(app, addr, String(config.weight));
+    await pool.set(app + "_" + addr, "1", { EX: 10 });
+    await pool.publish("CH_" + app, `${addr} ${config.weight}`);
+  } else await pool.set(app + "_" + addr, "1", { EX: 10 });
+}
+export async function start(address = "") {
+  init();
+  await stop();
+  addr = address;
+  pool = createClient({ url: config.registry });
+  pool.on("error", (error) => logger.error(error));
+  await pool.connect();
+  sub = pool.duplicate();
+  sub.on("error", (error) => logger.error(error));
+  sub.on("ready", () => {
+    for (const app of subscriptions)
+      fetchApp(app).catch((error) => logger.error(error));
+  });
+  await sub.connect();
+  running = true;
+  await register();
+  if (isServer()) {
+    let busy = false;
+    timer = setInterval(async () => {
+      if (busy) return;
+      busy = true;
+      try {
+        heartbeat = register();
+        await heartbeat;
+      } catch (error) {
+        logger.error(error);
+      } finally {
+        busy = false;
+      }
+    }, 1000);
+    timer.unref();
+  }
+  for (const [app, value] of Object.entries(config.calls))
+    await addExternalApp(app, value);
+  return true;
+}
+export async function stop() {
+  running = false;
+  if (timer) {
+    clearInterval(timer);
+    timer = undefined;
+  }
+  await heartbeat.catch(() => {});
+  if (sub) {
+    sub.destroy();
+    sub = undefined;
+  }
+  subscriptions.clear();
+  agents.http.destroy();
+  agents.https.destroy();
+  if (pool) {
+    try {
+      if (addr && config.app && pool.isReady) {
+        await pool.hDel(config.app, addr);
+        await pool.del(config.app + "_" + addr);
+        await pool.publish("CH_" + config.app, `${addr} 0`);
+      }
+    } finally {
+      pool.destroy();
+      pool = undefined;
+      addr = "";
+    }
+  }
+}
+export async function wait() {
+  while (running) await new Promise((resolve) => setTimeout(resolve, 250));
+}
+export function isServer() {
+  return !!(running && addr && config.app && config.weight > 0);
+}
+export function isClient() {
+  return running;
+}
+export function setLogger(value) {
+  logger = value;
+}
+export function setRoute(value) {
+  route = value;
+}
+export function setLoadBalancer(value) {
+  lb = value;
+}
+export function setHealthHandler(value) {
+  health = value;
+}
+export function healthHandler(request, response) {
+  if (request.method !== "GET") {
+    response.writeHead(405, { Allow: "GET" });
+    response.end();
+    return;
+  }
+  if (health) return health(request, response);
+  response.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+  response.end("OK");
+}
+export function middleware(next) {
+  return (request, response) => {
+    if (request.url.split("?")[0] === healthPath)
+      return healthHandler(request, response);
+    const controller = new AbortController();
+    response.once("close", () => {
+      if (!response.writableFinished)
+        controller.abort(new Error("incoming client disconnected"));
+    });
+    request.headers["x-request-id"] ??= randomUUID().replaceAll("-", "");
+    const context = {
+      headers: request.headers,
+      clientIP: request.socket?.remoteAddress,
+      host: request.headers.host,
+      userAgent: request.headers["user-agent"],
+      scheme: request.socket?.encrypted ? "https" : "http",
+      signal: controller.signal,
+    };
+    return requestStorage.run(context, () => next(request, response));
+  };
+}
+function relayHeaders(request) {
+  const result = {};
+  for (const [key, value] of Object.entries(request?.headers ?? {})) {
+    const name = key.toLowerCase();
+    if (relay.has(name) || name.startsWith("x-app-"))
+      result[name] = Array.isArray(value) ? [...value] : value;
+  }
+  result["x-request-id"] ??= randomUUID().replaceAll("-", "");
+  if (request) {
+    result["x-real-ip"] ??= request.clientIP ?? request.socket?.remoteAddress;
+    result["x-user-agent"] ??=
+      request.userAgent ?? request.headers?.["user-agent"];
+    result["x-host"] ??= request.host ?? request.headers?.host;
+    result["x-scheme"] ??=
+      request.scheme ?? (request.socket?.encrypted ? "https" : "http");
+  }
+  for (const key of Object.keys(result))
+    if (result[key] === undefined || result[key] === null) delete result[key];
+  return result;
+}
+function send(method, url, data, headers, timeout, version, signal) {
+  return new Promise((resolve, reject) => {
+    const target = new URL(url);
+    let body = data;
+    if (
+      body !== undefined &&
+      body !== null &&
+      !Buffer.isBuffer(body) &&
+      typeof body !== "string"
+    ) {
+      body = JSON.stringify(body);
+      headers = { "content-type": "application/json", ...headers };
+    }
+    let session, request;
+    if (version === 2) {
+      session = http2.connect(target.origin);
+      session.on("error", reject);
+      request = session.request({
+        ":method": method,
+        ":path": target.pathname + target.search,
+        ...headers,
+      });
+    } else
+      request = (target.protocol === "https:" ? https : http).request(target, {
+        method,
+        headers,
+        agent: agents[target.protocol.slice(0, -1)],
+        signal,
+      });
+    const chunks = [];
+    let metadata = {};
+    const timeoutId = setTimeout(
+      () => request.destroy(new Error("discover timeout")),
+      timeout,
+    );
+    const abort = () =>
+      request.destroy(signal.reason ?? new Error("cancelled"));
+    if (signal && version === 2) {
+      if (signal.aborted) abort();
+      else signal.addEventListener("abort", abort, { once: true });
+    }
+    const cleanup = () => {
+      clearTimeout(timeoutId);
+      signal?.removeEventListener("abort", abort);
+      session?.close();
+    };
+    request.on("error", (error) => {
+      cleanup();
+      reject(error);
+    });
+    const collect = (response) => {
+      response.on("data", (chunk) => chunks.push(chunk));
+      response.on("error", (error) => {
+        cleanup();
+        reject(error);
+      });
+      response.on("end", () => {
+        cleanup();
+        resolve({
+          statusCode: response.statusCode ?? metadata[":status"],
+          headers: response.headers ?? metadata,
+          body: Buffer.concat(chunks),
+          native: response,
+        });
+      });
+    };
+    if (version === 2) {
+      request.on("response", (headers) => {
+        metadata = headers;
+      });
+      collect(request);
+    } else request.on("response", collect);
+    request.end(body);
+  });
+}
+export class Caller {
+  constructor(request, requestLogger) {
+    this.request = request;
+    this.requestID = request
+      ? relayHeaders(request)["x-request-id"]
+      : undefined;
+    this.logger = requestLogger ?? logger;
+  }
+  async do(method, app, path, data, headers = {}, withNode = "") {
+    const call = { method, app, path, data, headers };
+    if (route) await route(call, this.request);
+    ({ method, app, path, data, headers } = call);
+    if (!path.startsWith("/") || path.startsWith("//"))
+      throw new Error("path must be local absolute");
+    if (!calls.has(app)) await addExternalApp(app);
+    const info = calls.get(app),
+      excluded = new Set(),
+      deadline = Date.now() + info.timeout;
+    const hs = relayHeaders(this.request);
+    if (this.requestID) hs["x-request-id"] = this.requestID;
+    for (const [name, value] of Object.entries(headers))
+      hs[name.toLowerCase()] = value;
+    if (isServer()) {
+      hs["x-from-app"] = config.app;
+      hs["x-from-node"] = addr;
+    }
+    if (info.token) hs["access-token"] = info.token;
+    if (
+      data &&
+      (typeof data.pipe === "function" ||
+        typeof data[Symbol.asyncIterator] === "function")
+    )
+      throw new TypeError("body must be replayable");
+    if (
+      data !== undefined &&
+      data !== null &&
+      !Buffer.isBuffer(data) &&
+      typeof data !== "string"
+    ) {
+      data = JSON.stringify(data);
+      hs["content-type"] ??= "application/json";
+    }
+    let lastError;
+    for (;;) {
+      if (this.request?.signal?.aborted) throw this.request.signal.reason;
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw new Error("discover total timeout");
+      const all = [...nodes.get(app).values()].filter(
+        (n) => !excluded.has(n.addr) && (!withNode || n.addr === withNode),
+      );
+      let ready = all.filter((n) => n.failedTimes < config.callRetryTimes);
+      if (!ready.length) ready = all;
+      if (!ready.length)
+        throw new Error(`all nodes failed for ${app}`, { cause: lastError });
+      const node = lb
+        ? lb.next(call, ready, this.request)
+        : ready.reduce((a, b) =>
+            a.usedTimes / a.weight <= b.usedTimes / b.weight ? a : b,
+          );
+      excluded.add(node.addr);
+      node.usedTimes++;
+      let result;
+      try {
+        result = await send(
+          method,
+          `${info.ssl ? "https" : "http"}://${node.addr}${path}`,
+          data,
+          hs,
+          remaining,
+          info.httpVersion,
+          this.request?.signal,
+        );
+        lastError = undefined;
+      } catch (error) {
+        if (this.request?.signal?.aborted) throw error;
+        lastError = error;
+      }
+      const failed =
+        !!lastError || (result.statusCode >= 502 && result.statusCode <= 504);
+      node.failedTimes = failed ? node.failedTimes + 1 : 0;
+      if (lb) lb.response(call, node, lastError, result);
+      if (!failed) return { ...result, node: node.addr };
+      if (node.failedTimes >= config.callRetryTimes && pool) {
+        await pool.hDel(app, node.addr);
+        await pool.publish("CH_" + app, `${node.addr} 0`);
+      }
+    }
+  }
+  get(app, path, headers) {
+    return this.do("GET", app, path, undefined, headers);
+  }
+  post(app, path, data, headers) {
+    return this.do("POST", app, path, data, headers);
+  }
+  put(app, path, data, headers) {
+    return this.do("PUT", app, path, data, headers);
+  }
+  delete(app, path, data, headers) {
+    return this.do("DELETE", app, path, data, headers);
+  }
+  head(app, path, headers) {
+    return this.do("HEAD", app, path, undefined, headers);
+  }
+  doWithNode(method, app, withNode, path, data, headers) {
+    return this.do(method, app, path, data, headers, withNode);
+  }
+  async open(app, path, headers = {}) {
+    if (!calls.has(app)) await addExternalApp(app);
+    const info = calls.get(app),
+      excluded = new Set();
+    for (;;) {
+      const ready = [...nodes.get(app).values()].filter(
+        (n) => !excluded.has(n.addr),
+      );
+      if (!ready.length) throw new Error("all websocket nodes failed");
+      const node = ready.reduce((a, b) =>
+        a.usedTimes / a.weight <= b.usedTimes / b.weight ? a : b,
+      );
+      excluded.add(node.addr);
+      node.usedTimes++;
+      const hs = { ...relayHeaders(this.request), ...headers };
+      if (isServer()) {
+        hs["x-from-app"] = config.app;
+        hs["x-from-node"] = addr;
+      }
+      if (info.token) hs["access-token"] = info.token;
+      try {
+        const ws = await new Promise((resolve, reject) => {
+          const socket = new WebSocket(
+            `${info.ssl ? "wss" : "ws"}://${node.addr}${path}`,
+            { headers: hs, handshakeTimeout: info.timeout },
+          );
+          socket.once("open", () => resolve(socket));
+          socket.once("error", reject);
+        });
+        node.failedTimes = 0;
+        return ws;
+      } catch (error) {
+        node.failedTimes++;
+      }
+    }
+  }
+}
+export function newCaller(request, requestLogger) {
+  return new Caller(
+    request === undefined ? requestStorage.getStore() : request,
+    requestLogger,
+  );
+}

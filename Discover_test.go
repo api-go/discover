@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"testing"
 	"time"
 
@@ -49,7 +50,9 @@ func TestDiscover(t *testing.T) {
 	defer server.Close()
 
 	// 配置 Discover
-	discover.Config.App = "test-app"
+	app := fmt.Sprintf("discover-http-test-%d", time.Now().UnixNano())
+	discover.Config.App = app
+	discover.Config.Calls = map[string]string{}
 	discover.Config.Registry = "redis://127.0.0.1:6379/15"
 
 	// 启动 Discover
@@ -60,17 +63,19 @@ func TestDiscover(t *testing.T) {
 	defer discover.Stop()
 
 	// 添加外部应用调用配置
-	discover.AddExternalApp("test-app", "1")
+	discover.AddExternalApp(app, "1")
 
 	// 等待节点同步
 	success := false
 	for i := 0; i < 20; i++ {
-		nodes := discover.GetAppNodes("test-app")
+		nodes := discover.GetAppNodes(app)
 		if len(nodes) > 0 {
 			success = true
 			break
 		}
-		time.Sleep(100 * time.Millisecond)
+		select {
+		case <-time.After(100 * time.Millisecond):
+		}
 	}
 	if !success {
 		t.Fatal("node discovery timed out")
@@ -78,7 +83,7 @@ func TestDiscover(t *testing.T) {
 
 	// 1. 使用 Caller 调用 HTTP
 	caller := discover.NewCaller(nil, nil)
-	res := caller.Get("test-app", "/")
+	res := caller.Get(app, "/")
 	if res.Error != nil {
 		t.Errorf("http call failed: %v", res.Error)
 	}
@@ -87,7 +92,7 @@ func TestDiscover(t *testing.T) {
 	}
 
 	// 2. 使用 Caller 调用 WebSocket
-	wsConn := caller.Open("test-app", "/ws")
+	wsConn := caller.Open(app, "/ws")
 	if wsConn == nil {
 		t.Fatal("websocket open failed")
 	}
@@ -110,16 +115,18 @@ func TestDiscover(t *testing.T) {
 	rd := redis.GetRedis(discover.Config.Registry, nil)
 	if rd.Error == nil {
 		// 模拟发现新节点
-		rd.PUBLISH("CH_test-app", "127.0.0.1:18002 100")
+		rd.PUBLISH("CH_"+app, "127.0.0.1:18002 100")
 
 		success = false
 		for i := 0; i < 20; i++ {
-			nodes := discover.GetAppNodes("test-app")
+			nodes := discover.GetAppNodes(app)
 			if len(nodes) >= 2 {
 				success = true
 				break
 			}
-			time.Sleep(100 * time.Millisecond)
+			select {
+			case <-time.After(100 * time.Millisecond):
+			}
 		}
 		if !success {
 			t.Error("node update sync failed")
@@ -131,8 +138,17 @@ func TestEasyStart(t *testing.T) {
 	if os.Getenv("DISCOVER_REDIS_INTEGRATION") != "1" {
 		t.Skip("set DISCOVER_REDIS_INTEGRATION=1 to run the Redis integration test")
 	}
+	if os.Getenv("DISCOVER_TEST_EASYSTART_CHILD") != "1" {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestEasyStart$")
+		cmd.Env = append(os.Environ(), "DISCOVER_TEST_EASYSTART_CHILD=1")
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("environment initialization: %v\n%s", err, output)
+		}
+		return
+	}
 	// 模拟环境变量
-	_ = os.Setenv("DISCOVER_APP", "test-app")
+	_ = os.Setenv("DISCOVER_APP", fmt.Sprintf("discover-easy-test-%d", time.Now().UnixNano()))
 	_ = os.Setenv("DISCOVER_LISTEN", "18003")
 	_ = os.Setenv("DISCOVER_REGISTRY", "redis://127.0.0.1:6379/15")
 

@@ -6,7 +6,7 @@ var Config = struct {
 	App            string            // 当前应用名称
 	Weight         int               // 权重，默认为 100
 	Calls          map[string]string // 调用的应用列表及其配置
-	CallRetryTimes int               // 调用重试次数
+	CallRetryTimes int               // 节点连续失败摘除阈值（成功清零）
 	IpPrefix       string            // 指定使用的 IP 网段
 }{
 	Weight:         100,

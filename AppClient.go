@@ -53,13 +53,17 @@ func (ac *AppClient) NextWithNode(app, withNode string, request *http.Request) *
 
 	ac.tryTimes++
 	if withNode != "" {
+		if ac.excludes[withNode] {
+			return nil
+		}
 		ac.excludes[withNode] = true
 		return allNodes[withNode]
 	}
 
 	readyNodes := make([]*NodeInfo, 0)
 	for _, node := range allNodes {
-		if ac.excludes[node.Addr] || node.FailedTimes >= Config.CallRetryTimes {
+		_, _, failed := node.State()
+		if ac.excludes[node.Addr] || failed >= Config.CallRetryTimes {
 			continue
 		}
 		readyNodes = append(readyNodes, node)

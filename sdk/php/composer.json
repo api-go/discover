@@ -1,0 +1,1 @@
+{"name":"apigo/discover","description":"Process-global Discover SDK for resident PHP services","type":"library","require":{"php":">=7.4","ext-redis":"*","ext-curl":"*"},"autoload":{"psr-4":{"Apigo\\Discover\\":"src/"}}}

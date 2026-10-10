@@ -1,0 +1,1 @@
+{"name":"apigo/discover-fpm","description":"Request-scoped PHP FPM entry for Discover","type":"library","require":{"php":">=7.4","apigo/discover":"1.5.16"},"repositories":[{"type":"path","url":"../php","options":{"versions":{"apigo/discover":"1.5.16"}}}],"autoload":{"psr-4":{"Apigo\\Discover\\Fpm\\":"src/"}}}
