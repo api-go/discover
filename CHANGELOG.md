@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## [v1.5.17] - 2026-10-14
+- Redis 订阅/停止在应用锁之外执行，动态注册与 Start/Stop 串行，避免重连 reset 回调造成锁反转。
+- Open / OpenContext 直接返回连接、握手响应、节点及错误，使用多值 http.Header，不保留旧签名。
+- 业务握手拒绝不重试、不摘节点；网络故障和 502/503/504 保留 failover，并返回最后一次响应。
+- 复用 go/http Open，支持 Caller.WebSocketClient 注入 TLS / Dialer；握手超时与连接生命周期分离。
+
 ## [v1.5.16] - 2026-10-10
 - 发布多语言 SDK 核心及独立 PHP FPM 入口；统一 Header 与应用头续传；提供原生 HTTP/健康接口；连续失败摘除并在成功后清零；保留应用层幂等责任。对齐 Log v1.5.17 及当前已发布的上游依赖。
 

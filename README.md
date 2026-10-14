@@ -37,7 +37,8 @@ discover:
 - `NewCaller(request *http.Request, logger *log.Logger) *Caller`: 创建调用器。传入原始请求可自动透传 Header。
 - `Caller.Get / Post / Put / Delete / Head`: 发起同步请求。
 - `Caller.Do(method, app, path, data, headers...)`: 发起通用请求，返回 `http.Result`。
-- `Caller.Open(app, path, headers...)`: 发起 WebSocket 连接。
+- `Caller.Open(app, path, headers ...http.Header) (*gohttp.WebSocketConn, *http.Response, string, error)`：返回连接、握手响应、节点和错误。
+- `Caller.OpenContext(ctx, app, path, headers ...http.Header)`：显式指定连接生命周期 Context。
 
 ### 手动管理
 - `AddExternalApp(app, callConf string)`: 手动添加需要发现的外部应用。
@@ -79,3 +80,17 @@ SDK 位于 `sdk/`，包括 Python、Node.js/TypeScript、Java、PHP 常驻、独
 ## v1.5.16 依赖基线
 
 本版本对齐 Log v1.5.17 与发布时模块索引中的上游已发布依赖；公开 API 保持兼容。
+
+## 本地未发布 Open 接口
+
+Go 客户端与 go/http 统一使用 Open / OpenContext；Discover 额外返回节点地址，旧 Open 签名删除。调用方负责关闭连接或失败响应 Body。
+
+```go
+conn, handshake, node, err := caller.Open("chat", "/ws", http.Header{"Cookie": {"session=one"}})
+```
+
+多值头、Cookie、Origin、子协议、SetRoute 与服务令牌保持传递。401/403、路径/协议拒绝不重试、不累计节点失败；网络故障和 502/503/504 在握手阶段切换节点，最后一次失败响应仍返回。建立后不自动重连。
+
+配置超时只约束握手，父 Context 控制已建立连接。`Caller.WebSocketClient *gohttp.Client` 可注入私有 CA、mTLS、自定义拨号和独立 WebSocket Dialer。每次尝试复制客户端配置，不修改共享客户端。拒绝正文最多保留 1024 字节，长度由 go/http 归一化。
+
+Redis 订阅与停止调用移至应用锁之外，并将动态注册与 Start/Stop 串行，避免重连回调造成锁反转。当前 go.mod 引用 ../http 开发补丁，发布前须切换正式 HTTP tag。

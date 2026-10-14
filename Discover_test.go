@@ -92,18 +92,18 @@ func TestDiscover(t *testing.T) {
 	}
 
 	// 2. 使用 Caller 调用 WebSocket
-	wsConn := caller.Open(app, "/ws")
-	if wsConn == nil {
+	wsConn, _, _, err := caller.Open(app, "/ws")
+	if err != nil || wsConn == nil {
 		t.Fatal("websocket open failed")
 	}
 	defer wsConn.Close()
 
 	msg := []byte("hello")
-	if err := wsConn.WriteMessage(websocket.TextMessage, msg); err != nil {
+	if err := wsConn.Conn.WriteMessage(websocket.TextMessage, msg); err != nil {
 		t.Fatalf("ws write failed: %v", err)
 	}
 
-	_, reply, err := wsConn.ReadMessage()
+	_, reply, err := wsConn.Conn.ReadMessage()
 	if err != nil {
 		t.Fatalf("ws read failed: %v", err)
 	}

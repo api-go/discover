@@ -1,5 +1,13 @@
 # Test Report
 
+## v1.5.17 验证
+- `TestDynamicSubscriptionsDuringRestart` 使用 Redis DB15 验证重启期间并发新增订阅与停止；本地节点夹具独立于注册中心。
+- 验证握手取消及时返回，既不增加也不清零已有失败计数；默认 Open 不共享应用 CookieJar，多 Header 参数保留重复值。
+- 2026-10-14：GOWORK=off 全量（DISCOVER_REDIS_INTEGRATION=1）、基准和 Open/订阅/生命周期 race（2 次）通过；Apple M3 Max，DefaultLoadBalancer 15.30 ns/op，0 B/op、0 allocs/op。API 使用 go doc -all 与源码核对。
+- Open 覆盖 200/301/400/401/403/404/426/429/500 不重试且不累计节点失败；503 切换及最终响应保留。
+- 覆盖多值头/Cookie、路由、服务令牌、子协议、握手 Set-Cookie、握手超时后连接仍可用、取消不计失败以及 WSS 私有 CA。
+- GOWORK=off 使用已发布 http v1.5.12；API 使用 go doc 与源码核对。
+
 ## v1.5.15 发布验证（2026-10-06）
 - 普通测试、benchmark 与启用 Redis 的完整 race 检查通过。
 - `TestHeartbeatStopWaitAndRestart` 覆盖 20 轮启动/停止、重复 Start、3 个并发 Wait、重复 Wait 与注销结果；无定时 sleep。

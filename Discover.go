@@ -187,12 +187,19 @@ func startSub() bool {
 		appLock.Unlock()
 		return false
 	}
-	// Repeated Start after Stop must also restart the subscription lifecycle.
+	// Redis reset callbacks call fetchApp and acquire appLock. Never call
+	// Subscribe or Start while holding appLock: Redis holds its subscription
+	// lock while invoking these callbacks.
+	pool := pubsubRedisPool
+	apps := make([]string, 0, len(appSubscribed))
 	for app := range appSubscribed {
-		subscribeAppUnderLock(app)
+		apps = append(apps, app)
 	}
 	appLock.Unlock()
-	pubsubRedisPool.Start()
+	for _, app := range apps {
+		subscribeApp(pool, app)
+	}
+	pool.Start()
 	appLock.Lock()
 
 	isClient = true
@@ -200,8 +207,8 @@ func startSub() bool {
 	return true
 }
 
-func subscribeAppUnderLock(app string) {
-	pubsubRedisPool.Subscribe("CH_"+app, func() {
+func subscribeApp(pool *redis.Redis, app string) {
+	pool.Subscribe("CH_"+app, func() {
 		fetchApp(app)
 	}, func(data []byte) {
 		a := strings.Split(string(data), " ")
@@ -220,20 +227,18 @@ func Stop() {
 	defer lifecycleLock.Unlock()
 	stopHeartbeat()
 	appLock.Lock()
-	if isClient && pubsubRedisPool != nil {
-		pubsubRedisPool.Stop()
-		isClient = false
-	}
-
-	if isServer {
-		if serverRedisPool != nil {
-			serverRedisPool.HDEL(Config.App, myAddr)
-			serverRedisPool.DEL(Config.App + "_" + myAddr)
-			serverRedisPool.PUBLISH("CH_"+Config.App, fmt.Sprintf("%s %d", myAddr, 0))
-		}
-		isServer = false
-	}
+	client, subscriptions := isClient, pubsubRedisPool
+	server, registry, app, addr := isServer, serverRedisPool, Config.App, myAddr
+	isClient, isServer = false, false
 	appLock.Unlock()
+	if client && subscriptions != nil {
+		subscriptions.Stop()
+	}
+	if server && registry != nil {
+		registry.HDEL(app, addr)
+		registry.DEL(app + "_" + addr)
+		registry.PUBLISH("CH_"+app, fmt.Sprintf("%s %d", addr, 0))
+	}
 }
 
 func Wait() {
@@ -301,13 +306,16 @@ func EasyStart() (string, int) {
 }
 
 func AddExternalApp(app, callConf string) bool {
+	lifecycleLock.Lock()
+	defer lifecycleLock.Unlock()
 	if addApp(app, callConf, true) {
-		if !isClient {
+		appLock.RLock()
+		client, pool := isClient, pubsubRedisPool
+		appLock.RUnlock()
+		if !client || pool == nil {
 			startSub()
 		} else {
-			appLock.Lock()
-			subscribeAppUnderLock(app)
-			appLock.Unlock()
+			subscribeApp(pool, app)
 		}
 		return true
 	}

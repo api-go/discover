@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"reflect"
-	"strings"
 	"sync"
 	"time"
 
@@ -15,7 +14,6 @@ import (
 	gohttp "apigo.cc/go/http"
 	"apigo.cc/go/id"
 	"apigo.cc/go/log"
-	"github.com/gorilla/websocket"
 )
 
 var appClientPools = make(map[string]*gohttp.Client)
@@ -52,10 +50,11 @@ func getHttpClient(app string, timeout time.Duration, h2c bool) *gohttp.Client {
 }
 
 type Caller struct {
-	Request   *http.Request
-	NoBody    bool
-	logger    *log.Logger
-	requestID string
+	WebSocketClient *gohttp.Client // Optional client configuration for Open.
+	Request         *http.Request
+	NoBody          bool
+	logger          *log.Logger
+	requestID       string
 }
 
 func NewCaller(request *http.Request, logger *log.Logger) *Caller {
@@ -100,14 +99,6 @@ func (c *Caller) Head(app, path string, headers ...string) *gohttp.Result {
 func (c *Caller) Do(method, app, path string, data any, headers ...string) *gohttp.Result {
 	r, _ := c.DoWithNode(method, app, "", path, data, headers...)
 	return r
-}
-
-func (c *Caller) Open(app, path string, headers ...string) *websocket.Conn {
-	r, _ := c.doWithNode(false, "WS", app, "", path, nil, headers...)
-	if v, ok := r.(*websocket.Conn); ok {
-		return v
-	}
-	return nil
 }
 
 func (c *Caller) DoWithNode(method, app, withNode, path string, data any, headers ...string) (*gohttp.Result, string) {
@@ -242,25 +233,10 @@ func (c *Caller) doWithNode(manualDo bool, method, app, withNode, path string, d
 		hc := getHttpClient(app, callInfo.Timeout, callInfo.HttpVersion == 2 && !callInfo.SSL)
 
 		var res *gohttp.Result
-		var wsConn *websocket.Conn
 
 		url := fmt.Sprintf("%s://%s%s", scheme, node.Addr, path)
 
-		if strings.ToUpper(method) == "WS" {
-			dialer := *websocket.DefaultDialer
-			dialer.HandshakeTimeout = callInfo.Timeout
-			h := contextHeaders.Clone()
-
-			if scheme == "https" {
-				scheme = "wss"
-			} else {
-				scheme = "ws"
-			}
-			wsUrl := fmt.Sprintf("%s://%s%s", scheme, node.Addr, path)
-			conn, resp, err := dialer.DialContext(ctx, wsUrl, h)
-			wsConn = conn
-			res = &gohttp.Result{Error: err, Response: resp}
-		} else {
+		{
 			if c.Request != nil {
 				if manualDo || c.NoBody {
 					res = hc.ManualDoContext(ctx, method, url, data, settedHeaders...)
@@ -312,9 +288,6 @@ func (c *Caller) doWithNode(manualDo bool, method, app, withNode, path string, d
 		}
 
 		node.finishCall(false)
-		if strings.ToUpper(method) == "WS" {
-			return wsConn, node.Addr
-		}
 		retainResponse(res)
 		return res, node.Addr
 	}
