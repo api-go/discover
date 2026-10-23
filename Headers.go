@@ -1,6 +1,7 @@
 package discover
 
 import (
+	gohttp "apigo.cc/go/http"
 	"apigo.cc/go/id"
 	"context"
 	"net"
@@ -21,6 +22,11 @@ func relayRequestHeaders(request *http.Request) http.Header {
 				headers[http.CanonicalHeaderKey(name)] = append([]string(nil), values...)
 			}
 		}
+		// A prepared ingress snapshot is authoritative. Unprepared requests retain
+		// legacy raw context only; this is never a security credential or RPC target.
+		if address, ok := gohttp.PreparedExternalAddress(request); ok {
+			_ = address.RelayHeaders(headers)
+		}
 		if headers.Get(HeaderClientIp) == "" {
 			ip, _, err := net.SplitHostPort(request.RemoteAddr)
 			if err != nil {
@@ -33,10 +39,10 @@ func relayRequestHeaders(request *http.Request) http.Header {
 		if headers.Get(HeaderUserAgent) == "" {
 			headers.Set(HeaderUserAgent, request.UserAgent())
 		}
-		if headers.Get(HeaderHost) == "" {
+		if _, prepared := gohttp.PreparedExternalAddress(request); !prepared && headers.Get(HeaderHost) == "" {
 			headers.Set(HeaderHost, request.Host)
 		}
-		if headers.Get(HeaderScheme) == "" {
+		if _, prepared := gohttp.PreparedExternalAddress(request); !prepared && headers.Get(HeaderScheme) == "" {
 			scheme := "http"
 			if request.TLS != nil {
 				scheme = "https"
@@ -74,4 +80,15 @@ func (c *Caller) relayHeaders() http.Header {
 		headers.Set(HeaderRequestId, c.requestID)
 	}
 	return headers
+}
+
+// PrepareExternalRequest explicitly resolves native ingress addressing and then
+// prepares discovery metadata. It never changes the RPC destination or authentication.
+func PrepareExternalRequest(request *http.Request, resolver *gohttp.ExternalAddressResolver) error {
+	address := resolver.Prepare(request)
+	if err := address.RelayHeaders(request.Header); err != nil {
+		return err
+	}
+	PrepareRequest(request)
+	return nil
 }

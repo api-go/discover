@@ -1,6 +1,7 @@
 package discover
 
 import (
+	gohttp "apigo.cc/go/http"
 	"apigo.cc/go/id"
 	"net"
 	"net/http"
@@ -75,15 +76,19 @@ func PrepareRequest(request *http.Request) {
 			request.Header.Set(HeaderClientIp, ip)
 		}
 	}
-	if request.Header.Get(HeaderHost) == "" && request.Host != "" {
-		request.Header.Set(HeaderHost, request.Host)
-	}
-	if request.Header.Get(HeaderScheme) == "" {
-		scheme := "http"
-		if request.TLS != nil {
-			scheme = "https"
+	if address, prepared := gohttp.PreparedExternalAddress(request); prepared {
+		_ = address.RelayHeaders(request.Header)
+	} else {
+		if request.Header.Get(HeaderHost) == "" && request.Host != "" {
+			request.Header.Set(HeaderHost, request.Host)
 		}
-		request.Header.Set(HeaderScheme, scheme)
+		if request.Header.Get(HeaderScheme) == "" {
+			scheme := "http"
+			if request.TLS != nil {
+				scheme = "https"
+			}
+			request.Header.Set(HeaderScheme, scheme)
+		}
 	}
 	if request.Header.Get(HeaderUserAgent) == "" && request.UserAgent() != "" {
 		request.Header.Set(HeaderUserAgent, request.UserAgent())

@@ -70,3 +70,11 @@ BenchmarkDefaultLoadBalancer-16    	79286206	        15.42 ns/op	       0 B/op	 
 ```
 
 - v1.5.16 依赖升级后重新运行 Python/Node.js/Java 测试及完整双向跨语言 runner，全部通过；本次仅发布 SDK 源码，真实 FPM/TLS 与具体框架装配仍为文档列明的后续范围。
+
+## External context (2026-10-23)
+- Prepared native ingress, immutable normalized address metadata, raw legacy context isolation, no default Origin relay, unchanged RPC target.
+- API inspection: go doc plus exported source review in place of unavailable getExports.
+
+- Temporary replace and real development Gateway HTTPS validation passed before release. Released dependency baseline: HTTP v1.5.15; GOWORK=off full suite and benchmarks, no replacements.
+
+- Released-dependency benchmark on Apple M3 Max: BenchmarkDefaultLoadBalancer 15.46 ns/op, 0 B/op, 0 allocs/op.

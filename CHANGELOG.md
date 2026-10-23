@@ -1,3 +1,6 @@
+## [v1.5.18] - 2026-10-23
+- Explicit native ingress external address preparation and pinned normalized relay context; preserve RPC target and authentication semantics.
+
 # CHANGELOG
 
 ## [v1.5.17] - 2026-10-14

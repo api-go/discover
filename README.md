@@ -93,4 +93,10 @@ conn, handshake, node, err := caller.Open("chat", "/ws", http.Header{"Cookie": {
 
 配置超时只约束握手，父 Context 控制已建立连接。`Caller.WebSocketClient *gohttp.Client` 可注入私有 CA、mTLS、自定义拨号和独立 WebSocket Dialer。每次尝试复制客户端配置，不修改共享客户端。拒绝正文最多保留 1024 字节，长度由 go/http 归一化。
 
-Redis 订阅与停止调用移至应用锁之外，并将动态注册与 Start/Stop 串行，避免重连回调造成锁反转。当前 go.mod 引用 ../http 开发补丁，发布前须切换正式 HTTP tag。
+Redis 订阅与停止调用移至应用锁之外，并将动态注册与 Start/Stop 串行，避免重连回调造成锁反转。发布验证必须使用正式 HTTP tag，不能依赖本地工作区替换。
+
+## 外部地址接入（v1.5.18）
+
+原生入口可调用 `PrepareExternalRequest(request, resolver)`，resolver 为 HTTP 模块显式可信对端策略；错误须在继续处理前拒绝。Service 自动完成此流程。`PrepareRequest` 和 Caller 的请求级多值快照优先使用 HTTP 已固定的安全解析结果，即使 Header 后续改变也不重新解释外部地址。
+
+未显式接入的原生请求仍保留旧 X-Host/X-Scheme 原始上下文兼容行为，它不是可信解析结果、认证凭据或内部 RPC 目标。默认不增加 Origin 续传；RPC 的 URL、Host、服务令牌及 TLS 校验目标不因外部地址变化。透明代理通过显式请求头保留 Origin。
