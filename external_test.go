@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func TestPreparedExternalContextDoesNotChangeRPCTarget(t *testing.T) {
+func TestDefaultExternalContextDoesNotChangeRPCTarget(t *testing.T) {
 	discover.Init()
 	old := discover.Config
 	discover.Config.Registry = ""
@@ -33,7 +33,8 @@ func TestPreparedExternalContextDoesNotChangeRPCTarget(t *testing.T) {
 	r.Header.Set("X-Host", "browser.example")
 	r.Header.Set("X-Scheme", "https")
 	r.Header.Set("Origin", "https://browser.example")
-	resolver, _ := gohttp.NewExternalAddressResolver(gohttp.ExternalAddressPolicy{TrustedProxies: []string{"127.0.0.1"}})
+	r.Header.Set("X-Request-ID", "outer-gateway")
+	resolver, _ := gohttp.NewExternalAddressResolver(gohttp.ExternalAddressPolicy{})
 	if err := discover.PrepareExternalRequest(r, resolver); err != nil {
 		t.Fatal(err)
 	}

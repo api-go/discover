@@ -1,3 +1,6 @@
+## [v1.5.19] - 2026-10-23
+- 验证默认内部 Request-ID 地址续传，不要求额外配置，RPC 目标、令牌及默认 Origin 续传语义保持不变。
+
 ## [v1.5.18] - 2026-10-23
 - Explicit native ingress external address preparation and pinned normalized relay context; preserve RPC target and authentication semantics.
 

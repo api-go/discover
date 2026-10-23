@@ -78,3 +78,11 @@ BenchmarkDefaultLoadBalancer-16    	79286206	        15.42 ns/op	       0 B/op	 
 - Temporary replace and real development Gateway HTTPS validation passed before release. Released dependency baseline: HTTP v1.5.15; GOWORK=off full suite and benchmarks, no replacements.
 
 - Released-dependency benchmark on Apple M3 Max: BenchmarkDefaultLoadBalancer 15.46 ns/op, 0 B/op, 0 allocs/op.
+
+## v1.5.19 default relay validation
+- Default policy without proxy addresses preserves incoming Request-ID browser context; real internal RPC target Host, HTTP transport, service token and absent default Origin are checked end to end.
+- 开发验收使用 GOWORK=off 与显式 ../http replace；发布复验改用正式 HTTP v1.5.16。
+
+- Development validation passed: GOWORK=off go test -v ./..., go test -bench=. ./..., go test -race ./... and go vet ./.... Apple M3 Max: Load balancer 15.50 ns/op, 0 B/op, 0 allocs/op. HTTP is tested independently; downstream modules use documented explicit local replace mappings.
+
+- v1.5.19 发布复验：HTTP v1.5.16 正式依赖，GOWORK=off、无 replace；全量测试及 benchmark 通过，API 使用 go doc -all 与导出源码核对（getExports 不可用）。

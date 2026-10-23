@@ -95,8 +95,12 @@ conn, handshake, node, err := caller.Open("chat", "/ws", http.Header{"Cookie": {
 
 Redis 订阅与停止调用移至应用锁之外，并将动态注册与 Start/Stop 串行，避免重连回调造成锁反转。发布验证必须使用正式 HTTP tag，不能依赖本地工作区替换。
 
-## 外部地址接入（v1.5.18）
+## 外部地址接入（v1.5.19）
 
 原生入口可调用 `PrepareExternalRequest(request, resolver)`，resolver 为 HTTP 模块显式可信对端策略；错误须在继续处理前拒绝。Service 自动完成此流程。`PrepareRequest` 和 Caller 的请求级多值快照优先使用 HTTP 已固定的安全解析结果，即使 Header 后续改变也不重新解释外部地址。
 
 未显式接入的原生请求仍保留旧 X-Host/X-Scheme 原始上下文兼容行为，它不是可信解析结果、认证凭据或内部 RPC 目标。默认不增加 Origin 续传；RPC 的 URL、Host、服务令牌及 TLS 校验目标不因外部地址变化。透明代理通过显式请求头保留 Origin。
+
+## 默认内部续传（开发中，未发布）
+
+受控服务链无需配置可信来源：外层 Gateway 生成规范 X-Host/X-Scheme，Service 在生成缺失 Request-ID 前解析，内部携带 Request-ID 的请求沿用最初外部地址。原生 HTTP 入口可用 `PrepareExternalRequest(r, nil)` 采用同一默认策略；也可显式传入可选 direct/trusted 策略。RPC 目标、认证和 TLS 语义不变，不默认续传 Origin。正式依赖 HTTP v1.5.16，无需本地 replace。
