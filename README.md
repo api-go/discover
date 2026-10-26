@@ -104,3 +104,7 @@ Redis 订阅与停止调用移至应用锁之外，并将动态注册与 Start/S
 ## 默认内部续传（开发中，未发布）
 
 受控服务链无需配置可信来源：外层 Gateway 生成规范 X-Host/X-Scheme，Service 在生成缺失 Request-ID 前解析，内部携带 Request-ID 的请求沿用最初外部地址。原生 HTTP 入口可用 `PrepareExternalRequest(r, nil)` 采用同一默认策略；也可显式传入可选 direct/trusted 策略。RPC 目标、认证和 TLS 语义不变，不默认续传 Origin。正式依赖 HTTP v1.5.16，无需本地 replace。
+
+## AES-GCM 配置密文兼容
+
+正式依赖选用 crypto v1.5.9，共享 `Symmetric.Decrypt/DecryptBytes` 先认证 `[12 字节 IV][密文][16 字节 tag]`，再使用配置 IV 兼容旧格式；现有 API 不变。新数据推荐 `EncryptBytesAutoIV`，先升级接收端再启用新写入。此能力针对 AES-GCM，不改变 CBC/SM4 格式。

@@ -86,3 +86,18 @@ BenchmarkDefaultLoadBalancer-16    	79286206	        15.42 ns/op	       0 B/op	 
 - Development validation passed: GOWORK=off go test -v ./..., go test -bench=. ./..., go test -race ./... and go vet ./.... Apple M3 Max: Load balancer 15.50 ns/op, 0 B/op, 0 allocs/op. HTTP is tested independently; downstream modules use documented explicit local replace mappings.
 
 - v1.5.19 发布复验：HTTP v1.5.16 正式依赖，GOWORK=off、无 replace；全量测试及 benchmark 通过，API 使用 go doc -all 与导出源码核对（getExports 不可用）。
+
+## v1.5.20 发布验证（2026-10-26）
+
+GOWORK=off，正式依赖 crypto v1.5.9，无 replace。`go test -v ./...`、`go test -bench=. ./...`、`go vet ./...`、`go mod verify` 通过。使用 `go doc` 与源码交叉核对 API，替代 getExports。现有回归覆盖本模块业务；新旧 GCM 格式、认证失败和性能基准见 crypto v1.5.9。
+
+跳过的外部条件场景：
+- --- SKIP: TestDiscover (0.00s)
+- --- SKIP: TestEasyStart (0.00s)
+- --- SKIP: TestHeartbeatStopWaitAndRestart (0.00s)
+- --- SKIP: TestDynamicSubscriptionsDuringRestart (0.00s)
+
+基准结果：
+```text
+BenchmarkDefaultLoadBalancer-16    	77819749	        15.32 ns/op	       0 B/op	       0 allocs/op
+```
