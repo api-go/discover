@@ -1,6 +1,6 @@
 """Runs real Redis/HTTP interoperability checks; uses only prefixed test keys."""
 
-import os, subprocess, tempfile, signal, select, time, sys
+import os, subprocess, tempfile, signal, select, time, sys, threading
 from pathlib import Path
 from redis import Redis
 
@@ -124,6 +124,9 @@ with tempfile.TemporaryDirectory(prefix="discover-conformance-") as tmp:
                         break
                 if not ready:
                     raise RuntimeError(name + " server not ready")
+                deadline = time.monotonic() + 8
+                while time.monotonic() < deadline and rd.hlen(peer) == 0:
+                    threading.Event().wait(0.01)
                 subprocess.run(
                     [client],
                     cwd=ROOT,

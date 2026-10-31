@@ -10,6 +10,13 @@ d.configure({
 });
 try {
   await d.start(addr);
+  const deadline = Date.now() + 8000;
+  while (
+    Date.now() < deadline &&
+    (!d.isRegistered() || !Object.keys(d.getAppNodes(target)).length)
+  )
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.ok(d.isRegistered() && Object.keys(d.getAppNodes(target)).length);
   const response = await d
     .newCaller({
       headers: { "X-App-Labels": ["a", "b"] },

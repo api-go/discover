@@ -16,6 +16,7 @@ import (
 	"apigo.cc/go/config"
 	"apigo.cc/go/id"
 	"apigo.cc/go/log"
+	"apigo.cc/go/rand"
 	"apigo.cc/go/redis"
 )
 
@@ -25,6 +26,9 @@ var (
 	pubsubRedisPool *redis.Redis
 	isServer        = false
 	isClient        = false
+	registered      = false
+	activeApp       string
+	reconcileWake   chan struct{}
 	myAddr          = ""
 	_logger         = log.DefaultLogger
 	_inited         = false
@@ -85,160 +89,201 @@ func Init() {
 	_logger = log.New(id.MakeID(12))
 }
 
+// Start launches recovery workers; success means started, not registered.
+// Initial startup does not perform Redis network IO on the caller.
+// Restart first drains the previous run using bounded recovery IO.
 func Start(addr string) bool {
 	lifecycleLock.Lock()
 	defer lifecycleLock.Unlock()
 	Init()
-	stopHeartbeat()
-	appLock.Lock()
-	myAddr = addr
-
-	isServer = Config.App != "" && Config.Weight > 0 && addr != ""
-	if isServer && Config.Registry != "" {
-		serverRedisPool = redis.GetRedis(Config.Registry, _logger)
-		if serverRedisPool.Error != nil {
-			logError(serverRedisPool.Error.Error())
-		}
-
-		// 注册节点
-		if serverRedisPool.HSET(Config.App, addr, Config.Weight) {
-			serverRedisPool.SETEX(Config.App+"_"+addr, 10, "1")
-			logInfo("registered")
-			serverRedisPool.PUBLISH("CH_"+Config.App, fmt.Sprintf("%s %d", addr, Config.Weight))
-			heartbeatStop = make(chan struct{})
-			heartbeatDone = make(chan struct{})
-			go daemon(heartbeatStop, heartbeatDone, serverRedisPool, Config.App, addr, Config.Weight, _logger)
-		} else {
-			logError("register failed")
-		}
-	}
-
-	appLock.Unlock()
+	stopRun()
 	calls := getCalls()
-	if len(calls) > 0 {
-		for app, conf := range calls {
-			addApp(app, conf, false)
-		}
-		if !startSub() {
-			return false
-		}
+	for app, conf := range calls {
+		addApp(app, conf, false)
 	}
+	appLock.Lock()
+	myAddr, activeApp, registered = addr, Config.App, false
+	isServer = Config.App != "" && Config.Weight > 0 && addr != ""
+	serverRedisPool = recoveryPool(Config.Registry, _logger)
+	clientRedisPool = serverRedisPool
+	pubsubRedisPool = recoveryPool(Config.Registry, _logger)
+	heartbeatStop, heartbeatDone = make(chan struct{}), make(chan struct{})
+	reconcileWake = make(chan struct{}, 1)
+	stop, done, wake := heartbeatStop, heartbeatDone, reconcileWake
+	pool, subscriptions := serverRedisPool, pubsubRedisPool
+	app, weight, server, logger := activeApp, Config.Weight, isServer, _logger
+	isClient = len(calls) > 0
+	appLock.Unlock()
+	// Subscription callbacks only wake the reconciler; they never perform network IO.
+	for name := range calls {
+		subscribeApp(subscriptions, name)
+	}
+	if len(calls) > 0 {
+		subscriptions.StartAsync()
+	}
+	go func() {
+		defer close(done)
+		var workers sync.WaitGroup
+		workers.Add(1)
+		go func() { defer workers.Done(); reconcile(stop, wake, pool, logger) }()
+		if server {
+			workers.Add(1)
+			go func() { defer workers.Done(); daemon(stop, pool, app, addr, weight, logger) }()
+		}
+		workers.Wait()
+	}()
 	return true
 }
 
-// stopHeartbeat is called with lifecycleLock held; channel close wakes the loop immediately.
-func stopHeartbeat() {
-	appLock.Lock()
-	if heartbeatStop != nil {
-		close(heartbeatStop)
-		heartbeatStop = nil
-	}
-	done := heartbeatDone
-	appLock.Unlock()
-	if done != nil {
-		<-done
+func recoveryPool(registry string, logger *log.Logger) *redis.Redis {
+	source := redis.GetRedis(registry, logger)
+	conf := *source.Config
+	// Private pools retain the configured auth/DB but bound recovery IO independently.
+	conf.ConnectTimeout, conf.ReadTimeout, conf.WriteTimeout = 500*time.Millisecond, 500*time.Millisecond, 500*time.Millisecond
+	quiet := logger.New(logger.GetTraceId())
+	quiet.SetLevel(log.CLOSE)
+	return redis.NewRedis(&conf, quiet)
+}
+
+func wakeReconcile() {
+	appLock.RLock()
+	wake := reconcileWake
+	appLock.RUnlock()
+	if wake != nil {
+		select {
+		case wake <- struct{}{}:
+		default:
+		}
 	}
 }
 
-func daemon(stop <-chan struct{}, done chan struct{}, pool *redis.Redis, app, addr string, weight int, logger *log.Logger) {
-	defer close(done)
-	logger.Info("Discover: daemon thread started", "app", app, "addr", addr)
-	ticker := time.NewTicker(time.Second)
+func reconcile(stop <-chan struct{}, wake <-chan struct{}, pool *redis.Redis, logger *log.Logger) {
+	var lastFailure time.Time
+	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 	for {
-		select {
-		case <-stop:
-			logger.Info("Discover: daemon thread stopped", "app", app, "addr", addr)
-			return
-		case <-ticker.C:
-			// A stop concurrent with the tick must be observed before another heartbeat.
+		for app := range getCalls() {
 			select {
 			case <-stop:
 				return
 			default:
 			}
-			if !pool.HEXISTS(app, addr) {
-				logger.Info("Discover: lost app registered info, re-registering", "app", app, "addr", addr)
-				if pool.HSET(app, addr, weight) {
-					pool.SETEX(app+"_"+addr, 10, "1")
-					pool.PUBLISH("CH_"+app, fmt.Sprintf("%s %d", addr, weight))
-				}
-			} else {
-				pool.SETEX(app+"_"+addr, 10, "1")
+			if err := fetchApp(pool, app); err != nil && time.Since(lastFailure) >= 30*time.Second {
+				logger.Warning("Discover: snapshot unavailable; retaining nodes", "app", app, "error", err.Error())
+				lastFailure = time.Now()
 			}
+		}
+		select {
+		case <-stop:
+			return
+		case <-wake:
+		case <-ticker.C:
 		}
 	}
 }
 
-func startSub() bool {
-	if Config.Registry == "" {
-		return true
-	}
+// IsRegistered reports the last confirmed registration/heartbeat state.
+func IsRegistered() bool {
+	appLock.RLock()
+	defer appLock.RUnlock()
+	return registered
+}
 
+// Registration is one Redis command: partial failures are retried as a whole.
+const registrationScript = `
+local old = redis.call('HGET', KEYS[1], ARGV[1])
+local live = redis.call('EXISTS', KEYS[2])
+redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])
+redis.call('SET', KEYS[2], '1', 'EX', 10)
+if old ~= ARGV[2] or live == 0 or ARGV[3] == '1' then
+ redis.call('PUBLISH', 'CH_' .. KEYS[1], ARGV[1] .. ' ' .. ARGV[2])
+end
+return 1`
+
+// stopRun is called with lifecycleLock held. Wait for workers before removing keys.
+func stopRun() {
 	appLock.Lock()
-	if clientRedisPool == nil {
-		clientRedisPool = redis.GetRedis(Config.Registry, _logger)
+	stop, done, subscriptions := heartbeatStop, heartbeatDone, pubsubRedisPool
+	if stop != nil {
+		close(stop)
+		heartbeatStop = nil
 	}
+	appLock.Unlock()
+	if subscriptions != nil {
+		subscriptions.Stop()
+	}
+	if done != nil {
+		<-done
+	}
+	appLock.Lock()
+	server, pool, app, addr := isServer, serverRedisPool, activeApp, myAddr
+	isServer, isClient, registered = false, false, false
+	reconcileWake = nil
+	appLock.Unlock()
+	if server && pool != nil {
+		pool.Do("EVAL", `redis.call('HDEL',KEYS[1],ARGV[1]); redis.call('DEL',KEYS[2]); redis.call('PUBLISH','CH_'..KEYS[1],ARGV[1]..' 0'); return 1`, 2, app, app+"_"+addr, addr)
+	}
+	if pool != nil {
+		_ = pool.GetPool().Close()
+	}
+	if subscriptions != nil {
+		_ = subscriptions.GetPool().Close()
+	}
+}
 
-	if pubsubRedisPool == nil {
-		pubsubRedisPool = redis.GetRedis(Config.Registry, _logger.New(id.MakeID(12)))
-	}
-	if clientRedisPool.Error != nil || pubsubRedisPool.Error != nil {
+func daemon(stop <-chan struct{}, pool *redis.Redis, app, addr string, weight int, logger *log.Logger) {
+	delay := time.Second
+	var lastFailure time.Time
+	for {
+		select {
+		case <-stop:
+			return
+		default:
+		}
+		wasRegistered := IsRegistered()
+		force := "0"
+		if !wasRegistered {
+			force = "1"
+		}
+		result := pool.Do("EVAL", registrationScript, 2, app, app+"_"+addr, addr, weight, force)
+		ready := result.Error == nil
+		appLock.Lock()
+		registered = ready
 		appLock.Unlock()
-		return false
+		if ready && !wasRegistered {
+			logger.Info("Discover: registered", "app", app, "addr", addr)
+		}
+		if !ready && (wasRegistered || time.Since(lastFailure) >= 30*time.Second) {
+			logger.Warning("Discover: registration unavailable; recovering", "app", app, "addr", addr, "error", result.Error.Error())
+			lastFailure = time.Now()
+		}
+		if ready {
+			delay = time.Second
+		} else if delay < 4*time.Second {
+			delay *= 2
+		}
+		waitDelay := delay
+		if !ready {
+			waitDelay -= time.Duration(rand.Int(0, 250)) * time.Millisecond
+		}
+		wait := time.NewTimer(waitDelay)
+		select {
+		case <-stop:
+			wait.Stop()
+			return
+		case <-wait.C:
+		}
 	}
-	// Redis reset callbacks call fetchApp and acquire appLock. Never call
-	// Subscribe or Start while holding appLock: Redis holds its subscription
-	// lock while invoking these callbacks.
-	pool := pubsubRedisPool
-	apps := make([]string, 0, len(appSubscribed))
-	for app := range appSubscribed {
-		apps = append(apps, app)
-	}
-	appLock.Unlock()
-	for _, app := range apps {
-		subscribeApp(pool, app)
-	}
-	pool.Start()
-	appLock.Lock()
-
-	isClient = true
-	appLock.Unlock()
-	return true
 }
 
 func subscribeApp(pool *redis.Redis, app string) {
-	pool.Subscribe("CH_"+app, func() {
-		fetchApp(app)
-	}, func(data []byte) {
-		a := strings.Split(string(data), " ")
-		addr := a[0]
-		weight := 0
-		if len(a) == 2 {
-			weight = cast.Int(a[1])
-		}
-		logInfo("received node update", "app", app, "addr", addr, "weight", weight)
-		pushNode(app, addr, weight)
-	})
+	pool.Subscribe("CH_"+app, wakeReconcile, func(_ []byte) { wakeReconcile() })
 }
 
 func Stop() {
 	lifecycleLock.Lock()
 	defer lifecycleLock.Unlock()
-	stopHeartbeat()
-	appLock.Lock()
-	client, subscriptions := isClient, pubsubRedisPool
-	server, registry, app, addr := isServer, serverRedisPool, Config.App, myAddr
-	isClient, isServer = false, false
-	appLock.Unlock()
-	if client && subscriptions != nil {
-		subscriptions.Stop()
-	}
-	if server && registry != nil {
-		registry.HDEL(app, addr)
-		registry.DEL(app + "_" + addr)
-		registry.PUBLISH("CH_"+app, fmt.Sprintf("%s %d", addr, 0))
-	}
+	stopRun()
 }
 
 func Wait() {
@@ -305,21 +350,24 @@ func EasyStart() (string, int) {
 	return ip.String(), port
 }
 
+// AddExternalApp updates desired subscriptions without waiting for Redis.
 func AddExternalApp(app, callConf string) bool {
 	lifecycleLock.Lock()
 	defer lifecycleLock.Unlock()
-	if addApp(app, callConf, true) {
-		appLock.RLock()
-		client, pool := isClient, pubsubRedisPool
-		appLock.RUnlock()
-		if !client || pool == nil {
-			startSub()
-		} else {
-			subscribeApp(pool, app)
-		}
-		return true
+	changed := addApp(app, callConf, false)
+	appLock.RLock()
+	pool := pubsubRedisPool
+	running := heartbeatStop != nil
+	appLock.RUnlock()
+	if running && pool != nil {
+		subscribeApp(pool, app)
+		pool.StartAsync()
+		appLock.Lock()
+		isClient = true
+		appLock.Unlock()
 	}
-	return false
+	wakeReconcile()
+	return changed
 }
 
 func SetNode(app, addr string, weight int) {
@@ -383,41 +431,32 @@ func addApp(app, callConf string, fetch bool) bool {
 	appLock.Unlock()
 
 	if fetch {
-		fetchApp(app)
+		wakeReconcile()
 	}
 	return true
 }
 
-func fetchApp(app string) {
-	appLock.RLock()
-	pool := clientRedisPool
-	appLock.RUnlock()
-	if pool == nil {
-		return
+// A failed snapshot never clears last-known nodes. The script observes membership
+// and leases atomically, and never deletes a live registration.
+func fetchApp(pool *redis.Redis, app string) error {
+	result := pool.Do("EVAL", `local out={}; local nodes=redis.call('HGETALL',KEYS[1]); for i=1,#nodes,2 do if redis.call('EXISTS',KEYS[1]..'_'..nodes[i])==1 then table.insert(out,nodes[i]);table.insert(out,nodes[i+1]);else redis.call('HDEL',KEYS[1],nodes[i]);end;end;return out`, 1, app)
+	if result.Error != nil {
+		return result.Error
 	}
-
-	results := pool.HGETALL(app)
-
-	// 检查存活
-	for addr := range results {
-		if !pool.EXISTS(app + "_" + addr) {
-			pool.HDEL(app, addr)
-			delete(results, addr)
+	values := result.Strings()
+	live := make(map[string]int, len(values)/2)
+	for index := 0; index+1 < len(values); index += 2 {
+		live[values[index]] = cast.Int(values[index+1])
+	}
+	for addr := range getAppNodes(app) {
+		if _, ok := live[addr]; !ok {
+			pushNode(app, addr, 0)
 		}
 	}
-
-	currentNodes := getAppNodes(app)
-	if currentNodes != nil {
-		for addr := range currentNodes {
-			if _, ok := results[addr]; !ok {
-				pushNode(app, addr, 0)
-			}
-		}
+	for addr, weight := range live {
+		pushNode(app, addr, weight)
 	}
-
-	for addr, res := range results {
-		pushNode(app, addr, res.Int())
-	}
+	return nil
 }
 
 func getAppNodes(app string) map[string]*NodeInfo {

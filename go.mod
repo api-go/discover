@@ -8,7 +8,8 @@ require (
 	apigo.cc/go/http v1.5.16
 	apigo.cc/go/id v1.5.9
 	apigo.cc/go/log v1.5.17
-	apigo.cc/go/redis v1.5.21
+	apigo.cc/go/rand v1.5.4
+	apigo.cc/go/redis v1.5.22
 	github.com/gorilla/websocket v1.5.3
 	golang.org/x/net v0.54.0
 )
@@ -18,7 +19,6 @@ require (
 	apigo.cc/go/encoding v1.5.8 // indirect
 	apigo.cc/go/file v1.5.9 // indirect
 	apigo.cc/go/jsmod v1.5.5 // indirect
-	apigo.cc/go/rand v1.5.4 // indirect
 	apigo.cc/go/safe v1.5.4 // indirect
 	apigo.cc/go/shell v1.5.8 // indirect
 	github.com/gomodule/redigo v1.9.3 // indirect

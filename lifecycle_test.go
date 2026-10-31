@@ -34,6 +34,7 @@ func TestHeartbeatStopWaitAndRestart(t *testing.T) {
 		if iteration%2 == 0 && !discover.Start(addr) {
 			t.Fatal("restart failed")
 		}
+		awaitRegistered(t)
 		if !rd.HEXISTS(app, addr) {
 			t.Fatal("node not registered")
 		}

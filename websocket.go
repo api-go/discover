@@ -169,9 +169,8 @@ func (c *Caller) OpenContext(ctx context.Context, app, path string, headers ...h
 		// transient gateway errors participate in failover and node eviction.
 		retry := openErr != nil && response == nil || response != nil && response.StatusCode >= 502 && response.StatusCode <= 504
 		canceled := ctx.Err() != nil || errors.Is(openErr, context.Canceled)
-		failures := 0
 		if !canceled {
-			failures = node.finishCall(retry)
+			node.finishCall(retry)
 		}
 		settedLoadBalancer.Response(appClient, node, openErr, response, time.Since(started))
 		if canceled {
@@ -195,14 +194,7 @@ func (c *Caller) OpenContext(ctx context.Context, app, path string, headers ...h
 			lastError = fmt.Errorf("WebSocket upstream returned %s", response.Status)
 		}
 		c.logError(lastError.Error(), "app", app, "node", node.Addr, "path", path, "tryTimes", appClient.tryTimes)
-		if failures >= Config.CallRetryTimes {
-			appLock.RLock()
-			pool := clientRedisPool
-			appLock.RUnlock()
-			if pool != nil {
-				pool.HDEL(app, node.Addr)
-				pool.PUBLISH("CH_"+app, fmt.Sprintf("%s 0", node.Addr))
-			}
-		}
+		// Failure scores are local; only the owner or an expired lease removes membership.
+
 	}
 }

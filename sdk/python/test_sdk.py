@@ -1,3 +1,4 @@
+import time
 import unittest
 import threading
 import os
@@ -75,6 +76,11 @@ class TestSDK(unittest.TestCase):
 
         try:
             d.start(goodAddr)
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline and (
+                not d.isRegistered() or goodAddr not in d.getAppNodes(app)
+            ):
+                threading.Event().wait(0.01)
             self.assertTrue(rd.hexists(app, goodAddr))
             d.setNode(app, badAddr, 100)
             d.setLoadBalancer(LB())

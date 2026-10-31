@@ -7,6 +7,18 @@ require 'uri'
 require 'monitor'
 
 module ApigoDiscover
+  REGISTRATION_SCRIPT = <<~LUA
+
+local old = redis.call('HGET', KEYS[1], ARGV[1])
+local live = redis.call('EXISTS', KEYS[2])
+redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])
+redis.call('SET', KEYS[2], '1', 'EX', 10)
+if old ~= ARGV[2] or live == 0 or ARGV[3] == '1' then
+ redis.call('PUBLISH', 'CH_' .. KEYS[1], ARGV[1] .. ' ' .. ARGV[2])
+end
+return 1
+LUA
+  SNAPSHOT_SCRIPT = "local out={}; local nodes=redis.call('HGETALL',KEYS[1]); for i=1,#nodes,2 do if redis.call('EXISTS',KEYS[1]..'_'..nodes[i])==1 then table.insert(out,nodes[i]);table.insert(out,nodes[i+1]);else redis.call('HDEL',KEYS[1],nodes[i]);end;end;return out"
   HEALTH_PATH = '/_discover/health'.freeze
   RELAY = %w[x-real-ip x-forwarded-for x-user-id x-device-id x-client-app-name x-client-app-version x-session-id x-request-id x-host x-scheme x-user-agent].freeze
   @config = {registry:'redis://127.0.0.1:6379/15',app:'',weight:100,calls:{},callRetryTimes:10}
@@ -14,6 +26,8 @@ module ApigoDiscover
   @lifecycle = Monitor.new
   @nodes, @calls, @threads, @subscribers = {}, {}, {}, {}
   @running = false
+  @registered = false
+  @snapshotLock = Monitor.new
   @logger = Logger.new($stderr)
   class << self
     attr_reader :config
@@ -54,11 +68,14 @@ module ApigoDiscover
     end
     def getAppNodes(app); @lock.synchronize {(@nodes[app]||{}).transform_values(&:dup)}; end
     def fetchApp(app)
-      return unless @pool
-      live=@pool.hgetall(app).select {|addr,_| @pool.exists?(app+'_'+addr)}
-      @lock.synchronize do
-        (@nodes[app]||{}).keys.each {|addr| setNode(app,addr,0) unless live.key?(addr)}
-        live.each {|addr,weight| setNode(app,addr,weight.to_i)}
+      @snapshotLock.synchronize do
+        return unless @pool && @running
+        values=@pool.eval(SNAPSHOT_SCRIPT,keys:[app],argv:[])
+        live=Hash[*values]
+        @lock.synchronize do
+          (@nodes[app]||{}).keys.each {|addr| setNode(app,addr,0) unless live.key?(addr)}
+          live.each {|addr,weight| setNode(app,addr,weight.to_i)}
+        end
       end
     end
     def addExternalApp(app,callConf='')
@@ -73,56 +90,73 @@ module ApigoDiscover
                 subscriber.subscribe('CH_'+app) do |on|
                   on.subscribe {|_,_| fetchApp(app)}
                   on.message do |_,message|
-                    parts=message.split(' ');setNode(app,parts[0],Integer(parts[1])) if parts.size==2
+                    fetchApp(app)
                   end
                 end
               rescue StandardError=>error
                 @logger.warn("discover subscription: #{error}") if @running
                 @lock.synchronize {@condition.wait(0.25)} if @running
               ensure
-                subscriber.close if subscriber
+                begin;subscriber.close if subscriber;rescue StandardError;end
               end
             end
           end
         end
       end
-      fetchApp(app);true
+      true
     end
+    def isRegistered; @registered; end
     def register
       return unless isServer
       app,addr,weight=@config[:app],@addr,@config[:weight]
-      unless @pool.hexists(app,addr)
-        @pool.hset(app,addr,weight);@pool.setex(app+'_'+addr,10,'1');@pool.publish('CH_'+app,"#{addr} #{weight}")
-      else; @pool.setex(app+'_'+addr,10,'1')
-      end
+      @pool.eval(REGISTRATION_SCRIPT,keys:[app,app+'_'+addr],argv:[addr,weight,@registered ? '0' : '1'])
+      @registered=true
     end
     def start(addr='')
       @lifecycle.synchronize do
-        init; stop; @addr=addr;@pool=Redis.new(url:@config[:registry],timeout:2);@pool.ping;@running=true;@condition=@lock.new_cond
-        register
+        init; stop; @addr=addr;@pool=Redis.new(url:@config[:registry],timeout:0.5,reconnect_attempts:0)
+        @running=true;@registered=false;@condition=@lock.new_cond
         if isServer
           @threads[:heartbeat]=Thread.new do
+            delay=1
             while @running
-              @lock.synchronize {@condition.wait(1)}
-              begin;register if @running;rescue StandardError=>error;@logger.warn(error);end
+              begin
+                register; delay=1
+              rescue StandardError=>error
+                @registered=false;delay=[4,delay*2].min;@logger.warn(error)
+              end
+              @lock.synchronize {@condition.wait(delay-(@registered ? 0 : Kernel.rand*0.25)) if @running}
             end
           end
         end
-        @config[:calls].each {|app,conf| addExternalApp(app,conf)};true
+        @config[:calls].each {|app,conf| addExternalApp(app,conf)}
+        @threads[:reconcile]=Thread.new do
+          while @running
+            apps=@lock.synchronize {@calls.keys}
+            apps.each do |app|
+              break unless @running
+              begin;fetchApp(app);rescue StandardError=>error;@logger.warn(error);end
+            end
+            @lock.synchronize {@condition.wait(2) if @running}
+          end
+        end
+        true
       end
     end
     def stop
       @lifecycle.synchronize do
         server=isServer;@running=false;@lock.synchronize {@condition.broadcast if @condition}
-        @subscribers.each_value(&:close);@subscribers.clear
-        @threads.each_value {|thread| thread.join(3)};@threads.clear
+        @subscribers.each_value {|subscriber| begin;subscriber.close;rescue StandardError;end};@subscribers.clear
+        @threads.each_value {|thread| thread.join};@threads.clear
         if @pool
           if server
-            app=@config[:app];@pool.hdel(app,@addr);@pool.del(app+'_'+@addr);@pool.publish('CH_'+app,"#{@addr} 0")
+            begin
+              app=@config[:app];@pool.hdel(app,@addr);@pool.del(app+'_'+@addr);@pool.publish('CH_'+app,"#{@addr} 0")
+            rescue StandardError=>error; @logger.warn(error); end
           end
           @pool.close;@pool=nil
         end
-        @addr=''
+        @registered=false;@addr=''
       end
     end
     def wait; @threads.values.each(&:join); end
@@ -134,7 +168,7 @@ module ApigoDiscover
     def setHealthHandler(value); @health=value; end
     def healthHandler(request={})
       return [405,{'Allow'=>'GET'},[]] if request.fetch(:method,'GET')!='GET'
-      @health ? @health.call(request) : [200,{'Content-Type'=>'text/plain; charset=utf-8'},['OK']]
+      @health ? @health.call(request) : (isServer && !isRegistered ? [503,{},['Discover registration unavailable']] : [200,{'Content-Type'=>'text/plain; charset=utf-8'},['OK']])
     end
     def middleware(app)
       lambda do |env|
@@ -164,11 +198,8 @@ module ApigoDiscover
     end
     def finish(call,node,error,response)
       failed=!!error || (response && (502..504).include?(response.code.to_i))
-      count=@lock.synchronize {node[:failedTimes]=failed ? node[:failedTimes]+1 : 0}
+      @lock.synchronize {node[:failedTimes]=failed ? node[:failedTimes]+1 : 0}
       @lb.response(call,node,error,response) if @lb
-      if failed && count>=@config[:callRetryTimes] && @pool
-        @pool.hdel(call[:app],node[:addr]);@pool.publish('CH_'+call[:app],"#{node[:addr]} 0")
-      end
       failed
     end
     def source; {'x-from-app'=>@config[:app],'x-from-node'=>@addr}; end

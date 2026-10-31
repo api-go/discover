@@ -174,7 +174,7 @@ func (c *Caller) DoRequest(app string, request *http.Request) (*http.Response, s
 			return nil, node.Addr, cancelError
 		}
 		failed := err != nil || response != nil && response.StatusCode >= 502 && response.StatusCode <= 504
-		failures := node.finishCall(failed)
+		node.finishCall(failed)
 		if !failed {
 			if response != nil && response.Body != nil {
 				response.Body = &nativeResponseBody{ReadCloser: response.Body, release: release}
@@ -182,15 +182,8 @@ func (c *Caller) DoRequest(app string, request *http.Request) (*http.Response, s
 			}
 			return response, node.Addr, err
 		}
-		if failures >= Config.CallRetryTimes {
-			appLock.RLock()
-			pool := clientRedisPool
-			appLock.RUnlock()
-			if pool != nil {
-				pool.HDEL(app, node.Addr)
-				pool.PUBLISH("CH_"+app, fmt.Sprintf("%s 0", node.Addr))
-			}
-		}
+		// Failure scores are local; only the owner or an expired lease removes membership.
+
 		// A streaming body without a factory is never replayed, even for retryable statuses.
 		if request.Body != nil && request.Body != http.NoBody && request.GetBody == nil {
 			if response != nil && response.Body != nil {

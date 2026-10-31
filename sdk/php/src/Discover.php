@@ -13,6 +13,18 @@ function str_ends_with(string $value, string $suffix): bool
 /** Global configuration; each Caller retains only its own incoming context. */
 class Discover
 {
+    private const registrationScript = <<<'LUA'
+
+    local old = redis.call('HGET', KEYS[1], ARGV[1])
+    local live = redis.call('EXISTS', KEYS[2])
+    redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])
+    redis.call('SET', KEYS[2], '1', 'EX', 10)
+    if old ~= ARGV[2] or live == 0 or ARGV[3] == '1' then
+     redis.call('PUBLISH', 'CH_' .. KEYS[1], ARGV[1] .. ' ' .. ARGV[2])
+    end
+    return 1
+    LUA;
+    private const snapshotScript = "local out={}; local nodes=redis.call('HGETALL',KEYS[1]); for i=1,#nodes,2 do if redis.call('EXISTS',KEYS[1]..'_'..nodes[i])==1 then table.insert(out,nodes[i]);table.insert(out,nodes[i+1]);else redis.call('HDEL',KEYS[1],nodes[i]);end;end;return out";
     public const healthPath = "/_discover/health";
     public static array $config = [
         "registry" => "redis://127.0.0.1:6379/15",
@@ -32,7 +44,12 @@ class Discover
         $fpm = false;
     protected static string $addr = "";
     private static ?int $timer = null;
+    private static ?int $reconcileTimer = null;
+    private static bool $registered = false;
+    private static int $generation = 0,
+        $workers = 0;
     private static array $subscriptions = [];
+    private static array $snapshotVersions = [];
     public static function init(): void
     {
         if (self::$inited) {
@@ -74,7 +91,8 @@ class Discover
         }
         $rd = new \Redis();
         $host = ($uri["scheme"] === "rediss" ? "tls://" : "") . $uri["host"];
-        $rd->connect($host, $uri["port"] ?? 6379, 2);
+        $rd->connect($host, $uri["port"] ?? 6379, 0.5);
+        $rd->setOption(\Redis::OPT_READ_TIMEOUT, 0.5);
         if (isset($uri["pass"])) {
             $rd->auth(
                 isset($uri["user"]) && $uri["user"] !== ""
@@ -148,15 +166,22 @@ class Discover
         if (!self::$running) {
             return;
         }
+        $version = (self::$snapshotVersions[$app] ?? 0) + 1;
+        self::$snapshotVersions[$app] = $version;
         $live = self::redis(function ($rd) use ($app) {
+            $values = $rd->eval(self::snapshotScript, [$app], 1);
+            if ($values === false) {
+                throw new \RuntimeException("Discover snapshot failed");
+            }
             $live = [];
-            foreach ($rd->hGetAll($app) as $addr => $weight) {
-                if ($rd->exists($app . "_" . $addr)) {
-                    $live[$addr] = (int) $weight;
-                }
+            for ($index = 0; $index < count($values); $index += 2) {
+                $live[$values[$index]] = (int) $values[$index + 1];
             }
             return $live;
         });
+        if (self::$snapshotVersions[$app] !== $version) {
+            return;
+        }
         foreach (array_keys(self::$nodes[$app] ?? []) as $addr) {
             if (!isset($live[$addr])) {
                 self::setNode($app, $addr, 0);
@@ -170,41 +195,70 @@ class Discover
     {
         self::$calls[$app] = self::parse($callConf);
         self::$nodes[$app] ??= [];
-        self::fetchApp($app);
         if (
             self::$running &&
             !self::$fpm &&
             !isset(self::$subscriptions[$app])
         ) {
             self::$subscriptions[$app] = null;
-            \Swoole\Coroutine::create(function () use ($app) {
-                while (self::$running) {
+            $generation = self::$generation;
+            \Swoole\Timer::after(1, function () use ($app, $generation) {
+                if (!self::$running || $generation !== self::$generation) {
+                    return;
+                }
+                self::$workers++;
+                \Swoole\Coroutine::create(function () use ($app, $generation) {
                     try {
-                        $rd = self::connection();
-                        self::$subscriptions[$app] = $rd;
-                        $rd->setOption(\Redis::OPT_READ_TIMEOUT, -1);
-                        self::fetchApp($app);
-                        $rd->subscribe(["CH_" . $app], function (
-                            $rd,
-                            $channel,
-                            $message
-                        ) use ($app) {
-                            $parts = explode(" ", $message);
-                            if (count($parts) === 2 && is_numeric($parts[1])) {
-                                self::setNode($app, $parts[0], (int) $parts[1]);
+                        while (
+                            self::$running &&
+                            $generation === self::$generation
+                        ) {
+                            try {
+                                $rd = self::connection();
+                                if (
+                                    !self::$running ||
+                                    $generation !== self::$generation
+                                ) {
+                                    try {
+                                        $rd->close();
+                                    } catch (\Throwable $ignored) {
+                                    }
+                                    return;
+                                }
+                                self::$subscriptions[$app] = $rd;
+                                $rd->setOption(\Redis::OPT_READ_TIMEOUT, -1);
+                                self::fetchApp($app);
+                                $rd->subscribe(["CH_" . $app], function (
+                                    $rd,
+                                    $channel,
+                                    $message
+                                ) use ($app) {
+                                    $parts = explode(" ", $message);
+                                    if (
+                                        count($parts) === 2 &&
+                                        is_numeric($parts[1])
+                                    ) {
+                                        self::fetchApp($app);
+                                    }
+                                });
+                            } catch (\Throwable $error) {
+                                if (self::$running) {
+                                    self::log($error);
+                                    \Swoole\Coroutine::sleep(0.25);
+                                }
+                            } finally {
+                                if (isset($rd)) {
+                                    try {
+                                        $rd->close();
+                                    } catch (\Throwable $ignored) {
+                                    }
+                                }
                             }
-                        });
-                    } catch (\Throwable $error) {
-                        if (self::$running) {
-                            self::log($error);
-                            \Swoole\Coroutine::sleep(0.25);
                         }
                     } finally {
-                        if (isset($rd)) {
-                            $rd->close();
-                        }
+                        self::$workers--;
                     }
-                }
+                });
             });
         }
         return true;
@@ -218,14 +272,26 @@ class Discover
         $addr = self::$addr;
         $weight = self::$config["weight"];
         self::redis(function ($rd) use ($app, $addr, $weight) {
-            if (!$rd->hExists($app, $addr)) {
-                $rd->hSet($app, $addr, $weight);
-                $rd->setex($app . "_" . $addr, 10, "1");
-                $rd->publish("CH_" . $app, "$addr $weight");
-            } else {
-                $rd->setex($app . "_" . $addr, 10, "1");
+            $result = $rd->eval(
+                self::registrationScript,
+                [
+                    $app,
+                    $app . "_" . $addr,
+                    $addr,
+                    (string) $weight,
+                    self::$registered ? "0" : "1",
+                ],
+                2,
+            );
+            if ($result === false) {
+                throw new \RuntimeException("Discover registration failed");
             }
         });
+        self::$registered = true;
+    }
+    public static function isRegistered(): bool
+    {
+        return self::$registered;
     }
     public static function start(string $addr = ""): bool
     {
@@ -238,23 +304,86 @@ class Discover
         }
         self::$addr = self::$fpm ? "" : $addr;
         self::$running = true;
-        self::redis(fn($rd) => $rd->ping());
-        if (!self::$fpm) {
-            self::register();
-            if (self::isServer()) {
-                self::$timer = \Swoole\Timer::tick(1000, function () {
-                    \Swoole\Coroutine::create(function () {
-                        try {
-                            self::register();
-                        } catch (\Throwable $error) {
-                            self::log($error);
-                        }
-                    });
-                });
-            }
-        }
+        self::$registered = false;
+        $generation = ++self::$generation;
         foreach (self::$config["calls"] as $app => $conf) {
             self::addExternalApp($app, $conf);
+        }
+        if (!self::$fpm) {
+            $busy = false;
+            $retryAt = 0;
+            $delay = 1;
+            self::$timer = \Swoole\Timer::tick(1000, function () use (
+                &$busy,
+                &$retryAt,
+                &$delay,
+                $generation
+            ) {
+                if (
+                    $busy ||
+                    !self::$running ||
+                    $generation !== self::$generation ||
+                    microtime(true) < $retryAt ||
+                    !self::isServer()
+                ) {
+                    return;
+                }
+                $busy = true;
+                self::$workers++;
+                \Swoole\Coroutine::create(function () use (
+                    &$busy,
+                    &$retryAt,
+                    &$delay
+                ) {
+                    try {
+                        self::register();
+                        $delay = 1;
+                    } catch (\Throwable $error) {
+                        self::$registered = false;
+                        $delay = min(4, $delay * 2);
+                        self::log($error);
+                    } finally {
+                        $retryAt =
+                            microtime(true) +
+                            $delay -
+                            (self::$registered ? 0 : random_int(0, 250) / 1000);
+                        $busy = false;
+                        self::$workers--;
+                    }
+                });
+            });
+            $snapshotBusy = false;
+            self::$reconcileTimer = \Swoole\Timer::tick(2000, function () use (
+                &$snapshotBusy,
+                $generation
+            ) {
+                if (
+                    $snapshotBusy ||
+                    !self::$running ||
+                    $generation !== self::$generation
+                ) {
+                    return;
+                }
+                $snapshotBusy = true;
+                self::$workers++;
+                \Swoole\Coroutine::create(function () use (&$snapshotBusy) {
+                    try {
+                        foreach (array_keys(self::$calls) as $app) {
+                            if (!self::$running) {
+                                break;
+                            }
+                            try {
+                                self::fetchApp($app);
+                            } catch (\Throwable $error) {
+                                self::log($error);
+                            }
+                        }
+                    } finally {
+                        $snapshotBusy = false;
+                        self::$workers--;
+                    }
+                });
+            });
         }
         return true;
     }
@@ -262,24 +391,41 @@ class Discover
     {
         $server = self::isServer();
         self::$running = false;
+        self::$generation++;
+        self::$registered = false;
+        if (self::$reconcileTimer !== null) {
+            \Swoole\Timer::clear(self::$reconcileTimer);
+            self::$reconcileTimer = null;
+        }
         if (self::$timer !== null) {
             \Swoole\Timer::clear(self::$timer);
             self::$timer = null;
         }
         foreach (self::$subscriptions as $rd) {
             if ($rd) {
-                $rd->close();
+                try {
+                    $rd->close();
+                } catch (\Throwable $ignored) {
+                }
             }
         }
         self::$subscriptions = [];
+        while (self::$workers > 0) {
+            \Swoole\Coroutine::sleep(0.01);
+        }
+        self::$registered = false;
         if ($server) {
             $app = self::$config["app"];
             $addr = self::$addr;
-            self::redis(function ($rd) use ($app, $addr) {
-                $rd->hDel($app, $addr);
-                $rd->del($app . "_" . $addr);
-                $rd->publish("CH_" . $app, "$addr 0");
-            });
+            try {
+                self::redis(function ($rd) use ($app, $addr) {
+                    $rd->hDel($app, $addr);
+                    $rd->del($app . "_" . $addr);
+                    $rd->publish("CH_" . $app, "$addr 0");
+                });
+            } catch (\Throwable $error) {
+                self::log($error);
+            }
         }
         self::$addr = "";
     }
@@ -344,7 +490,9 @@ class Discover
         }
         return self::$health
             ? (self::$health)($request)
-            : [200, ["Content-Type" => "text/plain; charset=utf-8"], "OK"];
+            : (self::isServer() && !self::isRegistered()
+                ? [503, [], "Discover registration unavailable"]
+                : [200, ["Content-Type" => "text/plain; charset=utf-8"], "OK"]);
     }
     public static function middleware(callable $next): callable
     {

@@ -1,3 +1,11 @@
+## [Unreleased] - 2026-10-31
+- Native Go and Python/Node.js/Java/Ruby/resident PHP now start recovery asynchronously, without requiring Redis at startup; IsRegistered/isRegistered reports registration separately.
+- Continuous bounded backoff, atomic membership/lease renewal and recovery notifications, Pub/Sub reconnect plus periodic authoritative snapshots; failed snapshots retain last-known nodes.
+- Stop cancels and joins recovery before unregister; default server health reports 503 until registration is confirmed. EasyStart no longer discards its address because Redis is down.
+- Redis development dependency uses explicit ../redis replace for StartAsync and cancellable subscription lifecycle. No release or deployment performed; Service integration is validated separately.
+- Call failures no longer delete global registry membership or synchronously contact Redis; local failure scoring and fallback probes isolate network partitions.
+- PHP-FPM initializes without Redis IO; it remains request-scoped and never registers a service.
+
 ## [v1.5.19] - 2026-10-23
 
 ## v1.5.20（2026-10-26）

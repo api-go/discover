@@ -16,6 +16,15 @@ $class::configure([
 $run = function () use ($class, $app, $addr, $target, $fpm) {
     try {
         $class::start($addr);
+        if (!$fpm) {
+            $deadline = microtime(true) + 8;
+            while (
+                microtime(true) < $deadline &&
+                (!$class::isRegistered() || !$class::getAppNodes($target))
+            ) {
+                \Swoole\Coroutine::sleep(0.01);
+            }
+        }
         $registered = Discover::redis(fn($rd) => $rd->hExists($app, $addr));
         if ($registered === $fpm) {
             throw new RuntimeException("wrong lifecycle ownership");

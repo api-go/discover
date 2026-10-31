@@ -37,6 +37,16 @@ class DiscoverTest {
     Discover.configure(cfg);
     try {
       Discover.start(addr);
+      long deadline =
+        System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+      while (
+          System.nanoTime() < deadline &&
+          (!Discover.isRegistered() || Discover.getAppNodes(app).isEmpty())
+        )
+        new java.util.concurrent.CountDownLatch(1).await(
+          10,
+          java.util.concurrent.TimeUnit.MILLISECONDS
+        );
       assertTrue(Discover.getAppNodes(app).containsKey(addr));
       assertThrows(java.io.IOException.class, () ->
         Discover.newCaller().post(app, "/submit", "payload".getBytes())
@@ -104,6 +114,16 @@ class DiscoverTest {
     Discover.configure(cfg);
     try {
       Discover.start(addr);
+      long deadline =
+        System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+      while (
+          System.nanoTime() < deadline &&
+          (!Discover.isRegistered() || Discover.getAppNodes(target).isEmpty())
+        )
+        new java.util.concurrent.CountDownLatch(1).await(
+          10,
+          java.util.concurrent.TimeUnit.MILLISECONDS
+        );
       var context = new Discover.RequestContext(
         Map.of("X-App-Labels", List.of("a", "b")),
         "192.0.2.4",
@@ -122,6 +142,16 @@ class DiscoverTest {
       assertEquals(app, data.get("headers").get("X-From-App").get(0).asText());
       assertEquals(2, data.get("headers").get("X-App-Labels").size());
       Discover.addExternalApp(target, "2");
+      long targetDeadline =
+        System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+      while (
+          System.nanoTime() < targetDeadline &&
+          Discover.getAppNodes(target).isEmpty()
+        )
+        new java.util.concurrent.CountDownLatch(1).await(
+          10,
+          java.util.concurrent.TimeUnit.MILLISECONDS
+        );
       assertEquals(
         java.net.http.HttpClient.Version.HTTP_2,
         Discover.newCaller().get(target, "/echo").nativeResponse().version()

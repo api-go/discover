@@ -262,12 +262,6 @@ class Caller
             if (!$failed) {
                 return $result;
             }
-            if ($node->failedTimes >= Discover::$config["callRetryTimes"]) {
-                Discover::redis(function ($rd) use ($app, $node) {
-                    $rd->hDel($app, $node->addr);
-                    $rd->publish("CH_" . $app, $node->addr . " 0");
-                });
-            }
         }
     }
     public function open(
@@ -335,12 +329,6 @@ class Caller
                 throw new \RuntimeException("websocket rejected: " . $code);
             }
             $node->failedTimes++;
-            if ($node->failedTimes >= Discover::$config["callRetryTimes"]) {
-                Discover::redis(function ($rd) use ($app, $node) {
-                    $rd->hDel($app, $node->addr);
-                    $rd->publish("CH_" . $app, $node->addr . " 0");
-                });
-            }
         }
     }
     public function get(string $app, string $path, array $headers = []): array

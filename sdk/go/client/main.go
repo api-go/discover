@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"time"
 )
 
 func main() {
@@ -18,6 +19,17 @@ func main() {
 		panic("start failed")
 	}
 	defer discover.Stop()
+	timeout := time.NewTimer(8 * time.Second)
+	defer timeout.Stop()
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for len(discover.GetAppNodes(app)) == 0 {
+		select {
+		case <-timeout.C:
+			panic("discovery timed out")
+		case <-tick.C:
+		}
+	}
 	request, _ := http.NewRequest("GET", discover.HealthPath, nil)
 	response, _, err := discover.NewCaller(nil, nil).DoRequest(app, request)
 	if err != nil {

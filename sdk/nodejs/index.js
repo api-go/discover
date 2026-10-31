@@ -3,7 +3,7 @@ import { createClient } from "redis";
 import http from "node:http";
 import https from "node:https";
 import http2 from "node:http2";
-import { randomUUID } from "node:crypto";
+import { randomUUID, randomInt } from "node:crypto";
 import WebSocket from "ws";
 const requestStorage = new AsyncLocalStorage();
 export const healthPath = "/_discover/health";
@@ -20,6 +20,16 @@ const relay = new Set(
   ),
 );
 let heartbeat = Promise.resolve();
+let registered = false;
+let discovery = Promise.resolve(),
+  discoveryTimer,
+  wakeDiscovery;
+let lifecycle = Promise.resolve();
+function serialize(action) {
+  const result = lifecycle.then(action, action);
+  lifecycle = result.catch(() => {});
+  return result;
+}
 let pool,
   sub,
   addr = "",
@@ -102,11 +112,12 @@ export function getAppNodes(app) {
 }
 async function fetchApp(app) {
   if (!pool) return;
-  const values = await pool.hGetAll(app);
+  const values = await pool
+    .withCommandOptions({ abortSignal: AbortSignal.timeout(1000) })
+    .eval(snapshotScript, { keys: [app], arguments: [] });
   const live = new Map();
-  for (const [address, weight] of Object.entries(values))
-    if (await pool.exists(app + "_" + address))
-      live.set(address, Number(weight));
+  for (let index = 0; index < values.length; index += 2)
+    live.set(values[index], Number(values[index + 1]));
   for (const address of nodes.get(app)?.keys() ?? [])
     if (!live.has(address)) setNode(app, address, 0);
   for (const [address, weight] of live) setNode(app, address, weight);
@@ -114,92 +125,177 @@ async function fetchApp(app) {
 export async function addExternalApp(app, callConf = "") {
   calls.set(app, parse(callConf));
   if (!nodes.has(app)) nodes.set(app, new Map());
-  if (sub && !subscriptions.has(app)) {
-    await sub.subscribe("CH_" + app, (message) => {
-      const parts = message.split(" ");
-      if (parts.length === 2 && Number.isFinite(Number(parts[1])))
-        setNode(app, parts[0], Number(parts[1]));
-    });
-    subscriptions.add(app);
-  }
-  await fetchApp(app);
+  wakeDiscovery?.();
   return true;
+}
+export function isRegistered() {
+  return registered;
 }
 async function register() {
   if (!isServer()) return;
-  const app = config.app;
-  if (!(await pool.hExists(app, addr))) {
-    await pool.hSet(app, addr, String(config.weight));
-    await pool.set(app + "_" + addr, "1", { EX: 10 });
-    await pool.publish("CH_" + app, `${addr} ${config.weight}`);
-  } else await pool.set(app + "_" + addr, "1", { EX: 10 });
+  await pool
+    .withCommandOptions({ abortSignal: AbortSignal.timeout(1000) })
+    .eval(registrationScript, {
+      keys: [config.app, config.app + "_" + addr],
+      arguments: [addr, String(config.weight), registered ? "0" : "1"],
+    });
+  registered = true;
 }
-export async function start(address = "") {
+export function start(address = "") {
+  return serialize(() => startRun(address));
+}
+async function startRun(address) {
   init();
-  await stop();
+  await stopRun();
   addr = address;
-  pool = createClient({ url: config.registry });
-  pool.on("error", (error) => logger.error(error));
-  await pool.connect();
+  const options = {
+    url: config.registry,
+    disableOfflineQueue: true,
+    socket: { connectTimeout: 500, reconnectStrategy: false },
+  };
+  pool = createClient(options);
   sub = pool.duplicate();
+  pool.on("error", (error) => logger.error(error));
   sub.on("error", (error) => logger.error(error));
-  sub.on("ready", () => {
-    for (const app of subscriptions)
-      fetchApp(app).catch((error) => logger.error(error));
-  });
-  await sub.connect();
+  sub.on("end", () => subscriptions.clear());
   running = true;
-  await register();
-  if (isServer()) {
-    let busy = false;
-    timer = setInterval(async () => {
-      if (busy) return;
-      busy = true;
-      try {
-        heartbeat = register();
-        await heartbeat;
-      } catch (error) {
-        logger.error(error);
-      } finally {
-        busy = false;
-      }
-    }, 1000);
-    timer.unref();
-  }
+  registered = false;
   for (const [app, value] of Object.entries(config.calls))
     await addExternalApp(app, value);
+  let delay = 1000;
+  const recover = async () => {
+    try {
+      if (!pool.isOpen) await pool.connect();
+      if (!running) return;
+      if (isServer()) await register();
+      delay = 1000;
+    } catch (error) {
+      registered = false;
+      if (pool.isOpen) pool.destroy();
+      logger.error(error);
+      delay = Math.min(4000, delay * 2);
+    } finally {
+      if (running) {
+        timer = setTimeout(
+          () => {
+            heartbeat = recover();
+          },
+          registered ? delay : delay - randomInt(0, 251),
+        );
+        timer.unref();
+      }
+    }
+  };
+  let reconciling = false,
+    reconcileRequested = false;
+  const reconcile = async () => {
+    if (reconciling) return;
+    reconciling = true;
+    reconcileRequested = false;
+    try {
+      if (!pool.isReady || !running) return;
+      // Pub/Sub is an optimization. Periodic snapshots recover missed messages.
+      try {
+        if (!sub.isOpen) {
+          subscriptions.clear();
+          await sub.connect();
+        }
+        for (const app of calls.keys()) {
+          if (!running) return;
+          if (!subscriptions.has(app)) {
+            await sub
+              .withCommandOptions({ abortSignal: AbortSignal.timeout(1000) })
+              .subscribe("CH_" + app, () => {
+                wakeDiscovery?.();
+              });
+            subscriptions.add(app);
+          }
+        }
+      } catch (error) {
+        if (sub.isOpen) sub.destroy();
+        subscriptions.clear();
+        logger.error(error);
+      }
+      for (const app of calls.keys()) {
+        if (!running) return;
+        await fetchApp(app);
+      }
+    } catch (error) {
+      logger.error(error);
+    } finally {
+      reconciling = false;
+      if (running) {
+        discoveryTimer = setTimeout(
+          () => {
+            discovery = reconcile();
+          },
+          reconcileRequested ? 0 : 2000,
+        );
+        discoveryTimer.unref();
+      }
+    }
+  };
+  wakeDiscovery = () => {
+    reconcileRequested = true;
+    if (!reconciling && running) {
+      clearTimeout(discoveryTimer);
+      discoveryTimer = setTimeout(() => {
+        discovery = reconcile();
+      }, 0);
+      discoveryTimer.unref();
+    }
+  };
+  wakeDiscovery();
+  // Schedule the first network operation after returning startup control.
+  timer = setTimeout(() => {
+    heartbeat = recover();
+  }, 0);
+  timer.unref();
   return true;
 }
-export async function stop() {
+export function stop() {
+  return serialize(stopRun);
+}
+async function stopRun() {
   running = false;
+  wakeDiscovery = undefined;
   if (timer) {
-    clearInterval(timer);
+    clearTimeout(timer);
     timer = undefined;
   }
-  await heartbeat.catch(() => {});
-  if (sub) {
-    sub.destroy();
-    sub = undefined;
+  if (discoveryTimer) {
+    clearTimeout(discoveryTimer);
+    discoveryTimer = undefined;
   }
+  if (sub?.isOpen) sub.destroy();
+  await Promise.allSettled([heartbeat, discovery]);
+  registered = false;
   subscriptions.clear();
-  agents.http.destroy();
-  agents.https.destroy();
   if (pool) {
     try {
       if (addr && config.app && pool.isReady) {
-        await pool.hDel(config.app, addr);
-        await pool.del(config.app + "_" + addr);
-        await pool.publish("CH_" + config.app, `${addr} 0`);
+        await pool
+          .withCommandOptions({ abortSignal: AbortSignal.timeout(1000) })
+          .eval(
+            "redis.call('HDEL',KEYS[1],ARGV[1]);redis.call('DEL',KEYS[2]);redis.call('PUBLISH','CH_'..KEYS[1],ARGV[1]..' 0');return 1",
+            { keys: [config.app, config.app + "_" + addr], arguments: [addr] },
+          );
       }
+    } catch (error) {
+      logger.error(error);
     } finally {
-      pool.destroy();
+      if (pool.isOpen) pool.destroy();
       pool = undefined;
-      addr = "";
     }
   }
+  sub = undefined;
+  addr = "";
+  agents.http.destroy();
+  agents.https.destroy();
 }
 export async function wait() {
-  while (running) await new Promise((resolve) => setTimeout(resolve, 250));
+  while (running) await new Promise((resolve) => setTimeout(resolve, 100));
+  await Promise.allSettled([heartbeat, discovery]);
 }
 export function isServer() {
   return !!(running && addr && config.app && config.weight > 0);
@@ -226,8 +322,11 @@ export function healthHandler(request, response) {
     return;
   }
   if (health) return health(request, response);
-  response.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
-  response.end("OK");
+  const unavailable = isServer() && !registered;
+  response.writeHead(unavailable ? 503 : 200, {
+    "Content-Type": "text/plain; charset=utf-8",
+  });
+  response.end(unavailable ? "Discover registration unavailable" : "OK");
 }
 export function middleware(next) {
   return (request, response) => {
@@ -427,10 +526,6 @@ export class Caller {
       node.failedTimes = failed ? node.failedTimes + 1 : 0;
       if (lb) lb.response(call, node, lastError, result);
       if (!failed) return { ...result, node: node.addr };
-      if (node.failedTimes >= config.callRetryTimes && pool) {
-        await pool.hDel(app, node.addr);
-        await pool.publish("CH_" + app, `${node.addr} 0`);
-      }
     }
   }
   get(app, path, headers) {
@@ -494,3 +589,15 @@ export function newCaller(request, requestLogger) {
     requestLogger,
   );
 }
+
+const registrationScript = `
+local old = redis.call('HGET', KEYS[1], ARGV[1])
+local live = redis.call('EXISTS', KEYS[2])
+redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])
+redis.call('SET', KEYS[2], '1', 'EX', 10)
+if old ~= ARGV[2] or live == 0 or ARGV[3] == '1' then
+ redis.call('PUBLISH', 'CH_' .. KEYS[1], ARGV[1] .. ' ' .. ARGV[2])
+end
+return 1`;
+const snapshotScript =
+  "local out={}; local nodes=redis.call('HGETALL',KEYS[1]); for i=1,#nodes,2 do if redis.call('EXISTS',KEYS[1]..'_'..nodes[i])==1 then table.insert(out,nodes[i]);table.insert(out,nodes[i+1]);else redis.call('HDEL',KEYS[1],nodes[i]);end;end;return out";

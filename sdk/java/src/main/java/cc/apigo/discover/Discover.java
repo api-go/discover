@@ -140,6 +140,8 @@ public final class Discover {
     "x-user-agent"
   );
   private static volatile boolean running = false;
+  private static volatile boolean registered = false;
+  private static final Object snapshotLock = new Object();
   private static boolean inited = false;
   private static String addr = "";
   private static JedisPool pool;
@@ -236,23 +238,30 @@ public final class Discover {
   }
 
   private static void fetchApp(String app) {
-    if (pool == null) return;
-    Map<String, String> live = new HashMap<>();
-    try (Jedis rd = pool.getResource()) {
-      for (var entry : rd.hgetAll(app).entrySet())
-        if (rd.exists(app + "_" + entry.getKey())) live.put(
-          entry.getKey(),
-          entry.getValue()
+    synchronized (snapshotLock) {
+      if (pool == null || !running) return;
+      Map<String, String> live = new HashMap<>();
+      try (Jedis rd = pool.getResource()) {
+        List<?> values = (List<?>) rd.eval(
+          snapshotScript,
+          List.of(app),
+          List.of()
         );
-    }
-    synchronized (lock) {
-      for (String address : new ArrayList<>(
-        nodes.getOrDefault(app, Map.of()).keySet()
-      ))
-        if (!live.containsKey(address)) setNode(app, address, 0);
-      live.forEach((address, weight) ->
-        setNode(app, address, Integer.parseInt(weight))
-      );
+        for (int index = 0; index < values.size(); index += 2) live.put(
+          values.get(index).toString(),
+          values.get(index + 1).toString()
+        );
+      }
+      if (!running) return;
+      synchronized (lock) {
+        for (String address : new ArrayList<>(
+          nodes.getOrDefault(app, Map.of()).keySet()
+        ))
+          if (!live.containsKey(address)) setNode(app, address, 0);
+        live.forEach((address, weight) ->
+          setNode(app, address, Integer.parseInt(weight))
+        );
+      }
     }
   }
 
@@ -265,27 +274,31 @@ public final class Discover {
         subscriberExecutor.submit(() -> subscribe(app))
       );
     }
-    fetchApp(app);
     return true;
   }
 
   private static void subscribe(String app) {
     while (running) {
-      try (Jedis rd = new Jedis(URI.create(config.registry))) {
+      try (Jedis rd = new Jedis(URI.create(config.registry), 500)) {
         subConnections.put(app, rd);
         rd.subscribe(
           new JedisPubSub() {
             @Override
             public void onSubscribe(String channel, int count) {
-              fetchApp(app);
+              try {
+                fetchApp(app);
+              } catch (Exception error) {
+                logger.warning("discover snapshot: " + error);
+              }
             }
 
             @Override
             public void onMessage(String channel, String message) {
-              String[] parts = message.split(" ");
-              if (parts.length == 2) try {
-                setNode(app, parts[0], Integer.parseInt(parts[1]));
-              } catch (NumberFormatException ignored) {}
+              try {
+                fetchApp(app);
+              } catch (Exception error) {
+                logger.warning("discover snapshot: " + error);
+              }
             }
           },
           "CH_" + app
@@ -306,14 +319,18 @@ public final class Discover {
     }
   }
 
+  public static boolean isRegistered() {
+    return registered;
+  }
+
   private static void register() {
-    if (!isServer()) return;
     try (Jedis rd = pool.getResource()) {
-      if (!rd.hexists(config.app, addr)) {
-        rd.hset(config.app, addr, Integer.toString(config.weight));
-        rd.setex(config.app + "_" + addr, 10, "1");
-        rd.publish("CH_" + config.app, addr + " " + config.weight);
-      } else rd.setex(config.app + "_" + addr, 10, "1");
+      rd.eval(
+        registrationScript,
+        List.of(config.app, config.app + "_" + addr),
+        List.of(addr, Integer.toString(config.weight), registered ? "0" : "1")
+      );
+      registered = true;
     }
   }
 
@@ -321,63 +338,76 @@ public final class Discover {
     init();
     stop();
     addr = address;
-    pool = new JedisPool(URI.create(config.registry));
-    try (Jedis rd = pool.getResource()) {
-      rd.ping();
-    }
+    pool = new JedisPool(URI.create(config.registry), 500);
+    pool.setMaxWait(Duration.ofMillis(500));
     running = true;
-    executor = Executors.newScheduledThreadPool(
-      Math.max(2, config.calls.size() + 2),
-      r -> {
-        Thread t = new Thread(r, "discover");
-        t.setDaemon(true);
-        return t;
-      }
-    );
-    subscriberExecutor = Executors.newCachedThreadPool(r -> {
-      Thread t = new Thread(r, "discover-sub");
-      t.setDaemon(true);
-      return t;
+    registered = false;
+    executor = Executors.newScheduledThreadPool(2, r -> {
+      Thread thread = new Thread(r, "discover-recovery");
+      thread.setDaemon(true);
+      return thread;
     });
-    register();
-    if (isServer()) executor.scheduleWithFixedDelay(
-      () -> {
+    subscriberExecutor = Executors.newCachedThreadPool(r -> {
+      Thread thread = new Thread(r, "discover-sub");
+      thread.setDaemon(true);
+      return thread;
+    });
+    config.calls.forEach(Discover::addExternalApp);
+    if (isServer()) executor.execute(() -> {
+      int delay = 1;
+      while (running && !Thread.currentThread().isInterrupted()) {
         try {
           register();
-        } catch (Exception e) {
-          logger.warning("discover heartbeat: " + e);
+          delay = 1;
+        } catch (Exception error) {
+          registered = false;
+          delay = Math.min(4, delay * 2);
+          logger.warning("discover registration: " + error);
+        }
+        try {
+          new CountDownLatch(1).await(
+            delay * 1000 -
+              (registered ? 0 : ThreadLocalRandom.current().nextInt(251)),
+            TimeUnit.MILLISECONDS
+          );
+        } catch (InterruptedException interrupted) {
+          Thread.currentThread().interrupt();
+          return;
+        }
+      }
+    });
+    executor.scheduleWithFixedDelay(
+      () -> {
+        List<String> apps;
+        synchronized (lock) {
+          apps = new ArrayList<>(calls.keySet());
+        }
+        for (String app : apps) {
+          if (!running || Thread.currentThread().isInterrupted()) return;
+          try {
+            fetchApp(app);
+          } catch (Exception error) {
+            logger.warning("discover snapshot: " + error);
+          }
         }
       },
-      1,
-      1,
+      0,
+      2,
       TimeUnit.SECONDS
     );
-    config.calls.forEach(Discover::addExternalApp);
     return true;
   }
 
   public static synchronized void stop() {
     running = false;
+    registered = false;
     subConnections.values().forEach(Jedis::close);
     subscriptions.clear();
-    if (subscriberExecutor != null) {
-      subscriberExecutor.shutdownNow();
-      try {
-        subscriberExecutor.awaitTermination(3, TimeUnit.SECONDS);
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
-      }
-      subscriberExecutor = null;
-    }
-    if (executor != null) {
-      executor.shutdownNow();
-      try {
-        executor.awaitTermination(3, TimeUnit.SECONDS);
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
-      }
-      executor = null;
-    }
+    shutdownWorker(subscriberExecutor);
+    subscriberExecutor = null;
+    shutdownWorker(executor);
+    executor = null;
+    registered = false;
     if (pool != null) {
       try {
         if (!addr.isEmpty() && !config.app.isEmpty()) try (
@@ -387,12 +417,28 @@ public final class Discover {
           rd.del(config.app + "_" + addr);
           rd.publish("CH_" + config.app, addr + " 0");
         }
+      } catch (Exception error) {
+        logger.warning("discover unregister: " + error);
       } finally {
         pool.close();
         pool = null;
         addr = "";
       }
     }
+  }
+
+  private static void shutdownWorker(ExecutorService worker) {
+    if (worker == null) return;
+    worker.shutdownNow();
+    boolean interrupted = false;
+    while (!worker.isTerminated()) {
+      try {
+        worker.awaitTermination(1, TimeUnit.SECONDS);
+      } catch (InterruptedException error) {
+        interrupted = true;
+      }
+    }
+    if (interrupted) Thread.currentThread().interrupt();
   }
 
   public static void waitForStop() throws InterruptedException {
@@ -438,11 +484,14 @@ public final class Discover {
         handler.handle(exchange);
         return;
       }
-      byte[] body = "OK".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+      boolean unavailable = isServer() && !registered;
+      byte[] body = (
+        unavailable ? "Discover registration unavailable" : "OK"
+      ).getBytes(java.nio.charset.StandardCharsets.UTF_8);
       exchange
         .getResponseHeaders()
         .set("Content-Type", "text/plain; charset=utf-8");
-      exchange.sendResponseHeaders(200, body.length);
+      exchange.sendResponseHeaders(unavailable ? 503 : 200, body.length);
       try (var stream = exchange.getResponseBody()) {
         stream.write(body);
       }
@@ -638,19 +687,11 @@ public final class Discover {
         boolean failed =
           last != null ||
           (result.statusCode >= 502 && result.statusCode <= 504);
-        int failures;
         synchronized (lock) {
           node.failedTimes = failed ? node.failedTimes + 1 : 0;
-          failures = node.failedTimes;
         }
         if (lb != null) lb.response(call, node, last, result);
         if (!failed) return result;
-        if (failures >= config.callRetryTimes && pool != null) try (
-          Jedis rd = pool.getResource()
-        ) {
-          rd.hdel(app, node.addr);
-          rd.publish("CH_" + app, node.addr + " 0");
-        }
       }
     }
 
@@ -758,4 +799,18 @@ public final class Discover {
       return doRequest("HEAD", app, path, null, null);
     }
   }
+
+  private static final String registrationScript = """
+
+  local old = redis.call('HGET', KEYS[1], ARGV[1])
+  local live = redis.call('EXISTS', KEYS[2])
+  redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])
+  redis.call('SET', KEYS[2], '1', 'EX', 10)
+  if old ~= ARGV[2] or live == 0 or ARGV[3] == '1' then
+   redis.call('PUBLISH', 'CH_' .. KEYS[1], ARGV[1] .. ' ' .. ARGV[2])
+  end
+  return 1
+  """;
+  private static final String snapshotScript =
+    "local out={}; local nodes=redis.call('HGETALL',KEYS[1]); for i=1,#nodes,2 do if redis.call('EXISTS',KEYS[1]..'_'..nodes[i])==1 then table.insert(out,nodes[i]);table.insert(out,nodes[i+1]);else redis.call('HDEL',KEYS[1],nodes[i]);end;end;return out";
 }

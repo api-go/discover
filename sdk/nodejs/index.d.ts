@@ -144,3 +144,5 @@ export class Caller {
     headers?: Record<string, string | string[]>,
   ): Promise<WebSocket>;
 }
+
+export function isRegistered(): boolean;

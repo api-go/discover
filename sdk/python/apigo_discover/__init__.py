@@ -3,6 +3,7 @@
 import contextvars
 import json
 import logging
+import random
 import os
 import threading
 import time
@@ -29,8 +30,10 @@ _lock = threading.RLock()
 _lifecycle = threading.RLock()
 _nodes, _calls, _threads, _http = {}, {}, {}, {}
 _stop = threading.Event()
+_snapshotLock = threading.RLock()
 _pool = None
 _addr = ""
+_registered = False
 _logger = logging.getLogger("apigo.discover")
 _route = None
 _lb = None
@@ -119,14 +122,15 @@ def getAppNodes(app):
 
 
 def _fetch(app):
+    with _snapshotLock:
+        _fetchSnapshot(app)
+
+
+def _fetchSnapshot(app):
     if _pool is None:
         return
-    snapshot = _pool.hgetall(app)
-    live = {
-        addr: int(weight)
-        for addr, weight in snapshot.items()
-        if _pool.exists(app + "_" + addr)
-    }
+    values = _pool.eval(_snapshotScript, 1, app)
+    live = {values[index]: int(values[index + 1]) for index in range(0, len(values), 2)}
     with _lock:
         for addr in list(_nodes.get(app, {})):
             if addr not in live:
@@ -136,23 +140,18 @@ def _fetch(app):
 
 
 def _subscribe(app):
-    # Subscription acknowledgements also refresh after redis-py reconnects.
-    with _pool.pubsub() as sub:
-        sub.subscribe("CH_" + app)
-        while not _stop.is_set():
-            try:
-                message = sub.get_message(timeout=0.25)
-                if message is None:
-                    continue
-                if message["type"] == "subscribe":
-                    _fetch(app)
-                elif message["type"] == "message":
-                    parts = message["data"].split(" ")
-                    if len(parts) == 2:
-                        setNode(app, parts[0], int(parts[1]))
-            except (redis.RedisError, ValueError) as error:
+    while not _stop.is_set():
+        try:
+            with _pool.pubsub() as sub:
+                sub.subscribe("CH_" + app)
+                while not _stop.is_set():
+                    message = sub.get_message(timeout=0.25)
+                    if message and message["type"] in ("subscribe", "message"):
+                        _fetch(app)
+        except (redis.RedisError, ValueError) as error:
+            if not _stop.is_set():
                 _logger.warning("discover subscription: %s", error)
-                _stop.wait(0.25)
+                _stop.wait(1)
 
 
 def addExternalApp(app, callConf=""):
@@ -163,30 +162,58 @@ def addExternalApp(app, callConf=""):
             thread = threading.Thread(target=_subscribe, args=(app,), daemon=True)
             _threads[app] = thread
             thread.start()
-    _fetch(app)
     return True
 
 
 def _register():
+    global _registered
     app, weight = config["app"], config["weight"]
-    if not _pool.hexists(app, _addr):
-        _pool.hset(app, _addr, weight)
-        _pool.set(app + "_" + _addr, "1", ex=10)
-        _pool.publish("CH_" + app, f"{_addr} {weight}")
-    else:
-        _pool.set(app + "_" + _addr, "1", ex=10)
+    _pool.eval(
+        _registrationScript,
+        2,
+        app,
+        app + "_" + _addr,
+        _addr,
+        weight,
+        "0" if _registered else "1",
+    )
+    _registered = True
+
+
+def isRegistered():
+    return _registered
 
 
 def _heartbeat():
-    while not _stop.wait(1):
+    global _registered
+    delay = 1
+    while not _stop.is_set():
         try:
             _register()
+            delay = 1
         except redis.RedisError as error:
+            _registered = False
             _logger.warning("discover heartbeat: %s", error)
+            delay = min(4, delay * 2)
+        _stop.wait(delay - (random.random() * 0.25 if not _registered else 0))
+
+
+def _reconcile():
+    while not _stop.is_set():
+        with _lock:
+            apps = list(_calls)
+        for app in apps:
+            if _stop.is_set():
+                return
+            try:
+                _fetch(app)
+            except redis.RedisError as error:
+                _logger.warning("discover snapshot: %s", error)
+        _stop.wait(2)
 
 
 def start(addr=""):
-    global _pool, _addr
+    global _pool, _addr, _registered
     with _lifecycle:
         init()
         stop()
@@ -198,23 +225,26 @@ def start(addr=""):
             socket_connect_timeout=2,
             socket_timeout=2,
         )
-        _pool.ping()
+        _registered = False
         if config["app"] and config["weight"] > 0 and addr:
-            _register()
             thread = threading.Thread(target=_heartbeat, daemon=True)
             _threads["@heartbeat"] = thread
             thread.start()
         for app, conf in config["calls"].items():
             addExternalApp(app, conf)
+        thread = threading.Thread(target=_reconcile, daemon=True)
+        _threads["@reconcile"] = thread
+        thread.start()
         return True
 
 
 def stop():
-    global _pool, _addr
+    global _pool, _addr, _registered
     with _lifecycle:
         _stop.set()
+        _registered = False
         for thread in list(_threads.values()):
-            thread.join(timeout=3)
+            thread.join()
         _threads.clear()
         if _pool is not None:
             try:
@@ -223,6 +253,8 @@ def stop():
                     _pool.hdel(app, _addr)
                     _pool.delete(app + "_" + _addr)
                     _pool.publish("CH_" + app, f"{_addr} 0")
+            except redis.RedisError as error:
+                _logger.warning("discover unregister: %s", error)
             finally:
                 _pool.close()
                 _pool = None
@@ -270,7 +302,11 @@ def healthHandler(request=None):
     return (
         _health(request)
         if _health
-        else (200, {"Content-Type": "text/plain; charset=utf-8"}, b"OK")
+        else (
+            (503, {}, b"Discover registration unavailable")
+            if isServer() and not isRegistered()
+            else (200, {"Content-Type": "text/plain; charset=utf-8"}, b"OK")
+        )
     )
 
 
@@ -415,15 +451,11 @@ class Caller:
                 lastError = error
             with _lock:
                 node.failedTimes = node.failedTimes + 1 if failed else 0
-                failures = node.failedTimes
             if _lb:
                 _lb.response(context, node, lastError, response)
             if not failed:
                 response.extensions["discoverNode"] = node.addr
                 return response
-            if failures >= config["callRetryTimes"] and _pool:
-                _pool.hdel(app, node.addr)
-                _pool.publish("CH_" + app, f"{node.addr} 0")
             if response:
                 response.close()
 
@@ -487,10 +519,6 @@ class Caller:
                     raise
                 with _lock:
                     node.failedTimes += 1
-                    failures = node.failedTimes
-                if failures >= config["callRetryTimes"] and _pool:
-                    _pool.hdel(app, node.addr)
-                    _pool.publish("CH_" + app, f"{node.addr} 0")
                 if time.monotonic() >= deadline:
                     raise TimeoutError("websocket handshake timeout") from error
 
@@ -592,3 +620,7 @@ def fromWSGI(environ):
         "scheme": environ.get("wsgi.url_scheme", "http"),
         "userAgent": environ.get("HTTP_USER_AGENT", ""),
     }
+
+
+_registrationScript = "\nlocal old = redis.call('HGET', KEYS[1], ARGV[1])\nlocal live = redis.call('EXISTS', KEYS[2])\nredis.call('HSET', KEYS[1], ARGV[1], ARGV[2])\nredis.call('SET', KEYS[2], '1', 'EX', 10)\nif old ~= ARGV[2] or live == 0 or ARGV[3] == '1' then\n redis.call('PUBLISH', 'CH_' .. KEYS[1], ARGV[1] .. ' ' .. ARGV[2])\nend\nreturn 1"
+_snapshotScript = "local out={}; local nodes=redis.call('HGETALL',KEYS[1]); for i=1,#nodes,2 do if redis.call('EXISTS',KEYS[1]..'_'..nodes[i])==1 then table.insert(out,nodes[i]);table.insert(out,nodes[i+1]);else redis.call('HDEL',KEYS[1],nodes[i]);end;end;return out"

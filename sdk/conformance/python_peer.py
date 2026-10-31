@@ -1,4 +1,4 @@
-import json, os
+import json, os, time, threading
 import apigo_discover as d
 from redis import Redis
 
@@ -10,6 +10,12 @@ d.configure(
 )
 try:
     d.start(addr)
+    deadline = time.monotonic() + 8
+    while time.monotonic() < deadline and (
+        not d.isRegistered() or not d.getAppNodes(target)
+    ):
+        threading.Event().wait(0.01)
+    assert d.isRegistered() and d.getAppNodes(target)
     response = d.newCaller(
         {
             "headers": {"X-App-Labels": ["a", "b"]},

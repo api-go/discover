@@ -101,3 +101,17 @@ GOWORK=off，正式依赖 crypto v1.5.9，无 replace。`go test -v ./...`、`go
 ```text
 BenchmarkDefaultLoadBalancer-16    	77819749	        15.32 ns/op	       0 B/op	       0 allocs/op
 ```
+
+## Recovery supervisor — 2026-10-31 (unreleased)
+
+- GOWORK=off; explicit development replacement: apigo.cc/go/redis => ../redis. All other dependencies remain published tags. Start means lifecycle startup; readiness is checked separately.
+- TestRegistrationRecovery: isolated Redis delayed startup, registration/health and node snapshot recovery, server loss/restart, Stop/Wait while Redis is absent, no re-registration after Stop.
+- TestStartWithUnresponsiveRedis: a TCP server accepts connections but never answers commands; initial Start returns within the test's 200 ms bound and Stop completes within four seconds. These are test thresholds, not production SLA guarantees.
+- TestCallFailuresDoNotDeleteGlobalRegistration: legacy HTTP, native HTTP and WS failures at threshold one preserve global membership; a cached node can serve requests again after backend recovery.
+- GOWORK=off full verbose tests, Redis-enabled race, benchmarks and go vet passed. DefaultLoadBalancer on Apple M3 Max: 14.85 ns/op, 0 B/op, 0 allocs/op (development run).
+- API inspected with GOWORK=off go doc -all and exported source because getExports is unavailable.
+- Cross-language recovery runner: sdk/conformance/recovery.py. Go, Python, Node.js, Java, Ruby and resident PHP pass startup without Redis, repeated retries, missed notification reconciliation, outage exceeding the 10-second lease, empty Redis restart, Stop with Redis available/absent, and no late re-registration. Peers also assert local call failure does not delete a global membership record. PHP-FPM verifies request initialization without Redis and later request recovery without owning registration.
+- Cross-language HTTP/H2C/WS and health runner: sdk/conformance/run.py. Native Go ↔ Python/Node/Java/Ruby/PHP interoperability and lifecycle cleanup pass. Ruby retains its documented H2C/WSS limitations. Python and Node unit suites and Java/JUnit pass.
+- Runtime validation: local Redis, Python 3.14 in an isolated venv, Node, Java 17, Ruby 2.6 with redis 4.8.1, PHP 7.4 with Redis/Swoole. No existing Redis process is stopped. Isolated fault-injection Redis processes disable persistence and are cleaned up.
+- Service validates actual HTTP listening during Redis absence, 503→200 recovery and owner shutdown. Gateway's existing full race suite passes with a temporary modfile replacing only Redis, Discover and Service with these local modules; no Gateway source/dependency file is changed.
+- Verification scope: fault duration exceeds the lease but is not a 24-hour soak. No live Learning deployment, production ACL/failover, Redis Cluster or real FPM master validation is claimed. Lua EVAL and its underlying commands must be permitted.

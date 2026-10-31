@@ -24,12 +24,12 @@ discover:
 ### 全局配置
 - `Config.Registry / App / Weight`: 注册中心、当前应用名与节点权重。
 - `Config.Calls`: 被调用应用及调用配置。
-- `Config.CallRetryTimes`: 节点连续失败摘除阈值；成功后清零。每次调用不重复尝试同一节点。
+- `Config.CallRetryTimes`: 节点本地连续失败避让阈值；成功后清零。每次调用不重复尝试同一节点。
 - `Config.IpPrefix`: `EasyStart` 选择监听地址时使用的 IP 前缀。
 - `RelayHeaders`: 跨服务调用时自动透传的 Header 列表。
 
 ### 初始化与启动
-- `Start(addr string) bool`: 启动服务发现，指定当前节点的外部访问地址。
+- `Start(addr string) bool`: 异步启动服务发现，指定当前节点的外部访问地址；true 表示任务启动，不表示注册成功。
 - `EasyStart() (string, int)`: 自动监听可用端口并启动服务发现。返回 IP 和端口。
 - `Stop()`: 停止服务，等待正在进行的心跳退出后注销节点（v1.5.15）。
 
@@ -46,6 +46,7 @@ discover:
 - `SetNode(app, addr string, weight int)`: 手动设置某个服务的节点信息。
 - `Init / Start / Stop / Wait`: 管理全局单实例生命周期；Start/Stop 串行，重复 Start 替换心跳循环，Wait 可重复调用或有多个等待者。Config/SetLogger 应在启动前设置，不提供任意并发配置写入的保证。
 - `IsClient / IsServer`: 判断当前运行角色。
+- `IsRegistered() bool`: 最近一次注册/心跳是否得到确认；未注册时后台仍持续恢复。
 - `SetLogger(logger)`: 设置模块日志器。
 
 ### 负载均衡与路由
@@ -68,7 +69,7 @@ discover:
 SDK 位于 `sdk/`，包括 Python、Node.js/TypeScript、Java、PHP 常驻、独立 PHP FPM 入口、Ruby；Go 直接使用本模块，无需 go/service。[接口对照与接入](sdk/README.md)、[共同协议](protocol/SDK.md)、[验收后版本联动](RELEASE-CHECKLIST.md)。
 
 - Header 统一为 X-Real-IP、X-From-App、X-From-Node、X-User-Agent；自动续传 X-App-*（大小写不敏感）。来源应用/节点按当前调用方覆盖。旧 X-Discover-From-* 不再输出；Service 随依赖升级统一读取这些字段。
-- `HealthPath`：GET /_discover/health，默认 200/OK。`HealthHandler()` 提供原生处理器，`SetHealthHandler(http.Handler)` 自定义应答，nil 恢复默认；`Middleware(next)` 挂载健康路径并补齐缺失的请求元数据；`PrepareRequest(r)` 供框架在解析可信 IP 后单独补齐。入口须自行处理代理信任和身份认证。
+- `HealthPath`：GET /_discover/health，未配置服务端注册或已确认注册时为 200/OK，常驻服务未确认注册时为 503。`HealthHandler()` 提供原生处理器，`SetHealthHandler(http.Handler)` 自定义应答，nil 恢复默认；`Middleware(next)` 挂载健康路径并补齐缺失的请求元数据；`PrepareRequest(r)` 供框架在解析可信 IP 后单独补齐。入口须自行处理代理信任和身份认证。
 - `Caller.DoRequest(app, *http.Request)` 返回原生 *http.Response、节点地址、error；URL 使用本地绝对路径，调用方负责关闭响应 Body。请求 body 有 GetBody 时可换节点重放，无 GetBody 的流只尝试一次。SetRoute 可修改原生调用元数据（App/Method/Path/Headers），原生 body 不通过 AppClient.Data 修改。
 - `SetHTTPClient(*http.Client)` 注入原生客户端，nil 恢复默认；SDK 不关闭外部提供的客户端。
 - `NodeInfo.State()` 返回并发安全的 weight/used/failed 快照；自定义负载均衡器使用 State，避免并发读写公开计数字段。
@@ -108,3 +109,21 @@ Redis 订阅与停止调用移至应用锁之外，并将动态注册与 Start/S
 ## AES-GCM 配置密文兼容
 
 正式依赖选用 crypto v1.5.9，共享 `Symmetric.Decrypt/DecryptBytes` 先认证 `[12 字节 IV][密文][16 字节 tag]`，再使用配置 IV 兼容旧格式；现有 API 不变。新数据推荐 `EncryptBytesAutoIV`，先升级接收端再启用新写入。此能力针对 AES-GCM，不改变 CBC/SM4 格式。
+
+## Recovery lifecycle (unreleased, 2026-10-31)
+
+Resident SDK Start starts recovery workers and returns without waiting for Redis (PHP-FPM only initializes its request-scoped client). Success means the lifecycle was started, **not** that registration is complete. Use `IsRegistered()` (Go) / `isRegistered()` (other resident SDKs) for the last confirmed registration/lease state. EasyStart returns the chosen address even while Redis is unavailable. Configure before Start; stop before changing registration configuration. Start during an existing run first drains that run with bounded network timeouts.
+
+Recovery continues until Stop, without a retry count limit. Registration retries back off to about four seconds with jitter, and normal leases renew about once a second (PHP uses timer scheduling). Network timeouts and Redis load add to these intervals; there is no guaranteed global recovery deadline. A stopped process cannot recover itself.
+
+Registration writes, lease renewal and recovery notifications use one Lua EVAL command. Snapshots atomically check leases and remove expired membership. Redis credentials must permit EVAL and the underlying hash, lease and Pub/Sub commands. The existing standalone Redis registry/key layout is retained; Redis Cluster cross-slot operation is not added.
+
+Pub/Sub accelerates reconciliation; periodic snapshots (about two seconds) repair lost notifications, reconnect races and empty-registry restarts. Failed snapshots preserve last-known nodes. This improves availability during registry outages but does not guarantee that cached backends remain alive; local failure scoring and fallback probes still apply. Periodic snapshots are authoritative: publish a notification after writing membership and a lease, rather than publishing an unbacked node alone.
+
+Stop cancels retries, joins in-flight workers, then performs best-effort unregister. No worker may register after Stop finishes. If unregister cannot reach Redis, its lease expires after ten seconds. Redis recovery networking uses finite connect/read/write or command timeouts. Custom application health handlers continue to override the default.
+
+Default GET `/_discover/health` returns 503 while an active server has no confirmed registration and 200 after registration recovers. It reports the latest worker observation, not a synchronous Redis probe or a check of all business dependencies. Use a separate process-liveness endpoint if the supervisor must keep the process alive during a registry outage.
+
+PHP-FPM does not own a persistent recovery worker or register a service. Its Start only initializes request-scoped discovery; calls use bounded Redis IO and may succeed on subsequent requests after Redis returns. Host registration remains the host/service manager's responsibility.
+
+Local call failures never delete global registry membership. Failure scores affect only that caller; fallback probes allow cached backends to recover even while Redis is unavailable. Only owner shutdown and atomic expired-lease cleanup remove membership.

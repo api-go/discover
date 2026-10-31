@@ -21,7 +21,8 @@ func SetHealthHandler(handler http.Handler) {
 	healthLock.Unlock()
 }
 
-// HealthHandler serves GET with 200/OK by default. It performs no downstream probes.
+// HealthHandler returns 503 while a configured server has no confirmed registration.
+// Custom handlers override this policy. It performs no synchronous downstream probes.
 func HealthHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -37,6 +38,14 @@ func HealthHandler() http.Handler {
 			return
 		}
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		appLock.RLock()
+		unavailable := isServer && !registered
+		appLock.RUnlock()
+		if unavailable {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte("Discover registration unavailable"))
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("OK"))
 	})

@@ -115,6 +115,7 @@ func TestDiscover(t *testing.T) {
 	rd := redis.GetRedis(discover.Config.Registry, nil)
 	if rd.Error == nil {
 		// 模拟发现新节点
+		rd.Do("EVAL", `redis.call("HSET",KEYS[1],ARGV[1],100);redis.call("SETEX",KEYS[2],10,"1");return 1`, 2, app, app+"_127.0.0.1:18002", "127.0.0.1:18002")
 		rd.PUBLISH("CH_"+app, "127.0.0.1:18002 100")
 
 		success = false

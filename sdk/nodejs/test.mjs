@@ -48,6 +48,12 @@ test("health, metadata, POST retries, consecutive failures and Redis lifecycle",
   });
   try {
     await discover.start(goodAddr);
+    const deadline = Date.now() + 5000;
+    while (
+      Date.now() < deadline &&
+      (!discover.isRegistered() || !discover.getAppNodes(app)[goodAddr])
+    )
+      await new Promise((resolve) => setTimeout(resolve, 10));
     assert.ok(await redis.hExists(app, goodAddr));
     assert.ok(await redis.exists(app + "_" + goodAddr));
     discover.setNode(app, badAddr, 100);

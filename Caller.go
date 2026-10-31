@@ -271,11 +271,7 @@ func (c *Caller) doWithNode(manualDo bool, method, app, withNode, path string, d
 			c.logError(errStr, "app", app, "node", node.Addr, "path", path, "tryTimes", appClient.tryTimes)
 
 			if failedTimes >= Config.CallRetryTimes {
-				logError("node removed due to high failures", "app", app, "node", node.Addr)
-				if clientRedisPool != nil {
-					clientRedisPool.Do("HDEL", app, node.Addr)
-					clientRedisPool.PUBLISH("CH_"+app, fmt.Sprintf("%s 0", node.Addr))
-				}
+				c.logError("node avoided locally due to high failures", "app", app, "node", node.Addr)
 			}
 			if _, streaming := data.(io.Reader); streaming {
 				retainResponse(res)
