@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"apigo.cc/go/discover"
-	"apigo.cc/go/redis"
+	"github.com/api-go/discover"
+	"github.com/api-go/redis"
 	"github.com/gorilla/websocket"
 )
 

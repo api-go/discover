@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"apigo.cc/go/discover"
+	"github.com/api-go/discover"
 )
 
 func TestDynamicSubscriptionsDuringRestart(t *testing.T) {

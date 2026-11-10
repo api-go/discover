@@ -1,7 +1,7 @@
 package discover_test
 
 import (
-	"apigo.cc/go/discover"
+	"github.com/api-go/discover"
 	"bytes"
 	"context"
 	"fmt"

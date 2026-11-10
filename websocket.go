@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	gohttp "apigo.cc/go/http"
+	gohttp "github.com/api-go/http"
 	"golang.org/x/net/http/httpguts"
 )
 

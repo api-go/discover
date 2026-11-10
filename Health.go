@@ -1,8 +1,8 @@
 package discover
 
 import (
-	gohttp "apigo.cc/go/http"
-	"apigo.cc/go/id"
+	gohttp "github.com/api-go/http"
+	"github.com/api-go/id"
 	"net"
 	"net/http"
 	"sync"

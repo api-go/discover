@@ -1,8 +1,8 @@
 package discover_test
 
 import (
-	"apigo.cc/go/discover"
-	"apigo.cc/go/redis"
+	"github.com/api-go/discover"
+	"github.com/api-go/redis"
 	"fmt"
 	"net"
 	"net/http"

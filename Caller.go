@@ -10,10 +10,10 @@ import (
 	"sync"
 	"time"
 
-	"apigo.cc/go/cast"
-	gohttp "apigo.cc/go/http"
-	"apigo.cc/go/id"
-	"apigo.cc/go/log"
+	"github.com/api-go/cast"
+	gohttp "github.com/api-go/http"
+	"github.com/api-go/id"
+	"github.com/api-go/log"
 )
 
 var appClientPools = make(map[string]*gohttp.Client)

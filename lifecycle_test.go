@@ -1,9 +1,9 @@
 package discover_test
 
 import (
-	"apigo.cc/go/discover"
-	"apigo.cc/go/log"
-	"apigo.cc/go/redis"
+	"github.com/api-go/discover"
+	"github.com/api-go/log"
+	"github.com/api-go/redis"
 	"fmt"
 	"os"
 	"sync"

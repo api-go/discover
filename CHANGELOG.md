@@ -1,3 +1,7 @@
+## [v1.5.22] - 2026-11-10
+
+- 迁移至 github.com/api-go/discover，同步内部模块路径与依赖。
+
 ## [Unreleased] - 2026-10-31
 - Native Go and Python/Node.js/Java/Ruby/resident PHP now start recovery asynchronously, without requiring Redis at startup; IsRegistered/isRegistered reports registration separately.
 - Continuous bounded backoff, atomic membership/lease renewal and recovery notifications, Pub/Sub reconnect plus periodic authoritative snapshots; failed snapshots retain last-known nodes.
@@ -40,7 +44,7 @@
 - **依赖对齐**: 补齐 `config`、`file`、`http`、`log` 与 `redis` 的级联版本。
 
 ## [v1.5.11] - 2026-09-05
-- **依赖对齐**: 升级全部 `apigo.cc/go/*` 依赖至当前已发布版本。
+- **依赖对齐**: 升级全部 `github.com/api-go/*` 依赖至当前已发布版本。
 
 ## [v1.5.9] - 2026-08-25
 - **仓库清理**: 忽略本地日志元数据文件，避免运行时状态进入版本控制。
@@ -55,11 +59,11 @@
 - **依赖校验修复**: 升级 `redis` 至 `v1.5.11`，并将间接依赖 `redigo` 固定为稳定版 `v1.9.3`，移除撤回版本。
 
 ## [v1.5.6] - 2026-07-18
-- **依赖升级**: 升级全部 `apigo.cc/go/*` 依赖到当前版本，移除已废弃的 `convert` 间接依赖。
+- **依赖升级**: 升级全部 `github.com/api-go/*` 依赖到当前版本，移除已废弃的 `convert` 间接依赖。
 - **Checksum 修复**: 淘汰内容已变化的 `crypto/safe v1.0.4` 依赖记录，重新生成可信的 `go.sum`。
 
 ## v1.0.0
-- 从 `ssgo/discover` 迁移至 `apigo.cc/go/discover`。
+- 从 `ssgo/discover` 迁移至 `github.com/api-go/discover`。
 - 采用全新的 `apigo.cc/go` 基础设施（log, redis, http, cast, u）。
 - 优化了注册中心同步机制，使用 `redis.Subscribe` 简化 PubSub 处理。
 - 增强了负载均衡算法，引入更精确的得分计算。

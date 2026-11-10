@@ -30,7 +30,7 @@
   - `TestEasyStart`: PASS
 - **Module Graph**: `go list -m all` 通过，不再出现 checksum mismatch。
 - **v1.5.12 Module Graph**: 使用 `redis v1.5.11` 与 `redigo v1.9.3`，不再包含撤回版本。
-- **v1.5.8 Module Graph**: `apigo.cc/go/*` 基础依赖已对齐模块索引中的当前 patch 版本。
+- **v1.5.8 Module Graph**: `github.com/api-go/*` 基础依赖已对齐模块索引中的当前 patch 版本。
 - **v1.5.9 Module Graph**: `log v1.5.11`、`redis v1.5.12` 与 `shell v1.5.6` 通过依赖审计。
 
 ## Benchmark
@@ -104,7 +104,7 @@ BenchmarkDefaultLoadBalancer-16    	77819749	        15.32 ns/op	       0 B/op	 
 
 ## Recovery supervisor — 2026-10-31 (unreleased)
 
-- GOWORK=off; explicit development replacement: apigo.cc/go/redis => ../redis. All other dependencies remain published tags. Start means lifecycle startup; readiness is checked separately.
+- GOWORK=off; explicit development replacement: github.com/api-go/redis => ../redis. All other dependencies remain published tags. Start means lifecycle startup; readiness is checked separately.
 - TestRegistrationRecovery: isolated Redis delayed startup, registration/health and node snapshot recovery, server loss/restart, Stop/Wait while Redis is absent, no re-registration after Stop.
 - TestStartWithUnresponsiveRedis: a TCP server accepts connections but never answers commands; initial Start returns within the test's 200 ms bound and Stop completes within four seconds. These are test thresholds, not production SLA guarantees.
 - TestCallFailuresDoNotDeleteGlobalRegistration: legacy HTTP, native HTTP and WS failures at threshold one preserve global membership; a cached node can serve requests again after backend recovery.
@@ -115,3 +115,13 @@ BenchmarkDefaultLoadBalancer-16    	77819749	        15.32 ns/op	       0 B/op	 
 - Runtime validation: local Redis, Python 3.14 in an isolated venv, Node, Java 17, Ruby 2.6 with redis 4.8.1, PHP 7.4 with Redis/Swoole. No existing Redis process is stopped. Isolated fault-injection Redis processes disable persistence and are cleaned up.
 - Service validates actual HTTP listening during Redis absence, 503→200 recovery and owner shutdown. Gateway's existing full race suite passes with a temporary modfile replacing only Redis, Discover and Service with these local modules; no Gateway source/dependency file is changed.
 - Verification scope: fault duration exceeds the lease but is not a 24-hour soak. No live Learning deployment, production ACL/failover, Redis Cluster or real FPM master validation is claimed. Lua EVAL and its underlying commands must be permitted.
+
+## GitHub migration validation (pending release)
+
+Module paths and internal dependency versions are migrated. Development verification uses GOWORK=off and explicit sibling replacements; remove these replacements before release. See migration validation logs for actual results. Existing unrelated working changes are preserved and require separate review.
+
+API inventory verification: `GOWORK=off go doc` succeeded; output retained in the migration validation directory. Source exports were preserved by the path migration.
+
+## GitHub release verification
+
+GOWORK=off go test -v ./... and go test -bench=. ./... passed using published GitHub dependencies, without local replacements. go mod verify passed.

@@ -3,7 +3,7 @@ package discover
 import (
 	"net/http"
 
-	"apigo.cc/go/log"
+	"github.com/api-go/log"
 )
 
 // AppClient 用于管理单个请求的重试和负载均衡状态

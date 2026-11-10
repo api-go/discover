@@ -1,7 +1,7 @@
 package main
 
 import (
-	"apigo.cc/go/discover"
+	"github.com/api-go/discover"
 	"fmt"
 	"io"
 	"net/http"

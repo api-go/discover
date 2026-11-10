@@ -2,8 +2,8 @@
 package main
 
 import (
-	"apigo.cc/go/cast"
-	"apigo.cc/go/discover"
+	"github.com/api-go/cast"
+	"github.com/api-go/discover"
 	"fmt"
 	"github.com/gorilla/websocket"
 	"golang.org/x/net/http2"

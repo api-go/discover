@@ -1,9 +1,9 @@
 package main
 
 import (
-	"apigo.cc/go/cast"
-	"apigo.cc/go/discover"
-	"apigo.cc/go/redis"
+	"github.com/api-go/cast"
+	"github.com/api-go/discover"
+	"github.com/api-go/redis"
 	"fmt"
 	"os"
 	"os/signal"

@@ -12,12 +12,12 @@ import (
 	"syscall"
 	"time"
 
-	"apigo.cc/go/cast"
-	"apigo.cc/go/config"
-	"apigo.cc/go/id"
-	"apigo.cc/go/log"
-	"apigo.cc/go/rand"
-	"apigo.cc/go/redis"
+	"github.com/api-go/cast"
+	"github.com/api-go/config"
+	"github.com/api-go/id"
+	"github.com/api-go/log"
+	"github.com/api-go/rand"
+	"github.com/api-go/redis"
 )
 
 var (
