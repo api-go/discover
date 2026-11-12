@@ -127,3 +127,7 @@ Default GET `/_discover/health` returns 503 while an active server has no confir
 PHP-FPM does not own a persistent recovery worker or register a service. Its Start only initializes request-scoped discovery; calls use bounded Redis IO and may succeed on subsequent requests after Redis returns. Host registration remains the host/service manager's responsibility.
 
 Local call failures never delete global registry membership. Failure scores affect only that caller; fallback probes allow cached backends to recover even while Redis is unavailable. Only owner shutdown and atomic expired-lease cleanup remove membership.
+
+### 精简调用日志
+
+`CallLog` 为出站调用摘要，字段包含 App、Target、Node、Method、Path（不含 query）、Phase、Status、UsedTime（秒）、Attempts、Error；TraceID 沿用调用请求的 RequestID。普通已缓冲请求 Phase=complete，流式请求 Phase=headers，WebSocket Phase=handshake，后两者不表示后续流传输成功。业务服务的入站 RequestLog 不变。上层已经生成等价代理摘要时，可对该 Caller 设置 `SuppressCallLog=true`；异常诊断仍保留。CallLog 注册为模型类型 call，支持 Reset。

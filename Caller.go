@@ -50,6 +50,7 @@ func getHttpClient(app string, timeout time.Duration, h2c bool) *gohttp.Client {
 }
 
 type Caller struct {
+	SuppressCallLog bool           // The caller provides its own equivalent proxy summary.
 	WebSocketClient *gohttp.Client // Optional client configuration for Open.
 	Request         *http.Request
 	NoBody          bool
@@ -58,11 +59,13 @@ type Caller struct {
 }
 
 func NewCaller(request *http.Request, logger *log.Logger) *Caller {
-	caller := &Caller{Request: request, logger: logger}
+	caller := &Caller{Request: request, logger: logger, requestID: id.MakeID(32)}
+	if logger != nil {
+		caller.requestID = logger.GetTraceId()
+	}
 	if request != nil {
-		caller.requestID = request.Header.Get(HeaderRequestId)
-		if caller.requestID == "" {
-			caller.requestID = id.MakeID(32)
+		if incoming := request.Header.Get(HeaderRequestId); incoming != "" {
+			caller.requestID = incoming
 		}
 	}
 	return caller
@@ -117,7 +120,22 @@ func (c *Caller) ManualDoWithNode(method, app, withNode, path string, data any, 
 	return nil, nodeAddr
 }
 
-func (c *Caller) doWithNode(manualDo bool, method, app, withNode, path string, data any, headers ...string) (any, string) {
+func (c *Caller) doWithNode(manualDo bool, method, app, withNode, path string, data any, headers ...string) (returned any, returnedNode string) {
+	started := time.Now()
+	attempts := 0
+	defer func() {
+		var response *http.Response
+		var err error
+		if result, ok := returned.(*gohttp.Result); ok && result != nil {
+			response = result.Response
+			err = result.Error
+		}
+		phase := "complete"
+		if manualDo || c.NoBody {
+			phase = "headers"
+		}
+		c.callLog(started, app, method, path, phase, returnedNode, response, err, attempts)
+	}()
 	callerHeaders := make(map[string]string)
 	for key, values := range c.relayHeaders() {
 		if len(values) > 0 {
@@ -223,6 +241,7 @@ func (c *Caller) doWithNode(manualDo bool, method, app, withNode, path string, d
 			break
 		}
 
+		attempts++
 		node.beginCall()
 		startTime := time.Now()
 		scheme := "http"

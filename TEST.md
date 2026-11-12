@@ -125,3 +125,7 @@ API inventory verification: `GOWORK=off go doc` succeeded; output retained in th
 ## GitHub release verification
 
 GOWORK=off go test -v ./... and go test -bench=. ./... passed using published GitHub dependencies, without local replacements. go mod verify passed.
+
+## 调用日志验证 — 2026-11-12
+
+CallLog 的 RequestID 续传、query 排除、单次摘要委托开关；HTTP/流式/WebSocket 现有完整回归与基准。开发使用 /tmp/apigo-validation-discover.mod 显式替换本次 timer/log 等本地模块，GOWORK=off。API 用 go doc 与导出源码核对。

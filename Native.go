@@ -27,7 +27,19 @@ func SetHTTPClient(client *http.Client) {
 // DoRequest calls app using a native outbound request. URL must have a local absolute path.
 // Request body is replayed only when GetBody is provided; responses are owned by the caller.
 // Incoming headers come from NewCaller.Request, then explicit outgoing headers override them.
-func (c *Caller) DoRequest(app string, request *http.Request) (*http.Response, string, error) {
+func (c *Caller) DoRequest(app string, request *http.Request) (returnedResponse *http.Response, returnedNode string, returnedError error) {
+	started := time.Now()
+	attempts := 0
+	defer func() {
+		method, path := "", ""
+		if request != nil {
+			method = request.Method
+			if request.URL != nil {
+				path = request.URL.Path
+			}
+		}
+		c.callLog(started, app, method, path, "headers", returnedNode, returnedResponse, returnedError, attempts)
+	}()
 	if request == nil || request.URL == nil || request.URL.Path == "" || request.URL.Path[0] != '/' || request.URL.IsAbs() || request.URL.Host != "" {
 		return nil, "", fmt.Errorf("outbound request requires a local absolute path")
 	}
@@ -158,6 +170,7 @@ func (c *Caller) DoRequest(app string, request *http.Request) (*http.Response, s
 			h2c := info != nil && info.HttpVersion == 2 && !info.SSL
 			client = getHttpClient(app, timeout, h2c).GetRawClient()
 		}
+		attempts++
 		node.beginCall()
 		started := time.Now()
 		response, err := client.Do(outbound)

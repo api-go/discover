@@ -25,7 +25,12 @@ func (c *Caller) Open(app, path string, headers ...http.Header) (*gohttp.WebSock
 	return c.OpenContext(ctx, app, path, headers...)
 }
 
-func (c *Caller) OpenContext(ctx context.Context, app, path string, headers ...http.Header) (*gohttp.WebSocketConn, *http.Response, string, error) {
+func (c *Caller) OpenContext(ctx context.Context, app, path string, headers ...http.Header) (returnedConnection *gohttp.WebSocketConn, returnedResponse *http.Response, returnedNode string, returnedError error) {
+	startedLog := time.Now()
+	attempts := 0
+	defer func() {
+		c.callLog(startedLog, app, "GET", path, "handshake", returnedNode, returnedResponse, returnedError, attempts)
+	}()
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -162,6 +167,7 @@ func (c *Caller) OpenContext(ctx context.Context, app, path string, headers ...h
 			target.Scheme = "wss"
 		}
 		target.Host = node.Addr
+		attempts++
 		node.beginCall()
 		started := time.Now()
 		conn, response, openErr := client.OpenContext(ctx, target.String(), fields)

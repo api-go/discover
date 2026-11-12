@@ -23,3 +23,7 @@ Default GET `/_discover/health` returns 503 while an active server has no confir
 PHP-FPM does not own a persistent recovery worker or register a service. Its Start only initializes request-scoped discovery; calls use bounded Redis IO and may succeed on subsequent requests after Redis returns. Host registration remains the host/service manager's responsibility.
 
 Local call failures never delete global registry membership. Failure scores affect only that caller; fallback probes allow cached backends to recover even while Redis is unavailable. Only owner shutdown and atomic expired-lease cleanup remove membership.
+
+### Compact outbound call logs
+
+CallLog records Target, Node, Method, query-free Path, Phase, Status, UsedTime in seconds, Attempts and Error, preserving the incoming RequestID as TraceID. Buffered calls use phase complete, streaming calls headers, WebSockets handshake. Headers/handshake success does not imply subsequent streaming success. Caller.SuppressCallLog delegates only the summary to an equivalent upper-layer proxy log; diagnostics and downstream request logs remain.

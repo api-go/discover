@@ -1,3 +1,7 @@
+## 未发布 — 2026-11-12
+- 新增保留调用链 TraceID 的精简 CallLog；HTTP、原生请求和 WebSocket 握手分别记录完成阶段。
+- Caller.SuppressCallLog 允许由上层等价 ProxyLog 委托记录摘要，不影响下游 RequestLog 或异常诊断。
+
 ## [v1.5.22] - 2026-11-10
 
 - 迁移至 github.com/api-go/discover，同步内部模块路径与依赖。
