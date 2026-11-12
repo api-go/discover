@@ -129,3 +129,7 @@ GOWORK=off go test -v ./... and go test -bench=. ./... passed using published Gi
 ## 调用日志验证 — 2026-11-12
 
 CallLog 的 RequestID 续传、query 排除、单次摘要委托开关；HTTP/流式/WebSocket 现有完整回归与基准。开发使用 /tmp/apigo-validation-discover.mod 显式替换本次 timer/log 等本地模块，GOWORK=off。API 用 go doc 与导出源码核对。
+
+## 日志依赖联动 — 2026-11-12
+
+开发验证使用 GOWORK=off 与 go.mod 的显式本地 replace；执行完整测试、全量基准（benchtime=100ms），API 用 go doc 与导出源码交叉核对。结果记录在 /tmp/apigo-discover-integration-*.txt。

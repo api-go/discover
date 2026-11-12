@@ -27,3 +27,7 @@ Local call failures never delete global registry membership. Failure scores affe
 ### Compact outbound call logs
 
 CallLog records Target, Node, Method, query-free Path, Phase, Status, UsedTime in seconds, Attempts and Error, preserving the incoming RequestID as TraceID. Buffered calls use phase complete, streaming calls headers, WebSockets handshake. Headers/handshake success does not imply subsequent streaming success. Caller.SuppressCallLog delegates only the summary to an equivalent upper-layer proxy log; diagnostics and downstream request logs remain.
+
+### Realtime log integration (unreleased, 2026-11-12)
+
+Explicit local go.mod replacements link this change without go.work. File logs default to paired .gz/.dict files, read using logv or built-in application log commands. Keep both files together; NoCompress retains plaintext. Release dependencies in order and remove development replacements before tagging. Published version claims remain unchanged.

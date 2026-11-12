@@ -1,3 +1,6 @@
+## 未发布 — 日志联动 2026-11-12
+- 显式联动实时压缩日志及文件级字典依赖，兼容明文 opt-out；正式版本待验收发布。
+
 ## 未发布 — 2026-11-12
 - 新增保留调用链 TraceID 的精简 CallLog；HTTP、原生请求和 WebSocket 握手分别记录完成阶段。
 - Caller.SuppressCallLog 允许由上层等价 ProxyLog 委托记录摘要，不影响下游 RequestLog 或异常诊断。
