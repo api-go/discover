@@ -1,8 +1,10 @@
-## 未发布 — 日志联动 2026-11-12
-- 未传 logger 时也为诊断日志绑定入口 RequestID，保证失败记录与调用摘要使用同一 TraceID。
-- 显式联动实时压缩日志及文件级字典依赖，兼容明文 opt-out；正式版本待验收发布。
+## [v1.5.23] - 2026-11-12
 
-## 未发布 — 2026-11-12
+- 发布已验收改动，使用 GitHub 正式依赖并移除临时本地 replace。
+
+- 未传 logger 时也为诊断日志绑定入口 RequestID，保证失败记录与调用摘要使用同一 TraceID。
+- 显式联动实时压缩日志及文件级字典依赖，兼容明文 opt-out；正式依赖已发布并移除开发 replace。
+
 - 新增保留调用链 TraceID 的精简 CallLog；HTTP、原生请求和 WebSocket 握手分别记录完成阶段。
 - Caller.SuppressCallLog 允许由上层等价 ProxyLog 委托记录摘要，不影响下游 RequestLog 或异常诊断。
 
