@@ -68,6 +68,11 @@ func NewCaller(request *http.Request, logger *log.Logger) *Caller {
 			caller.requestID = incoming
 		}
 	}
+	base := logger
+	if base == nil {
+		base = log.DefaultLogger
+	}
+	caller.logger = base.New(caller.requestID)
 	return caller
 }
 

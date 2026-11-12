@@ -133,3 +133,5 @@ CallLog 的 RequestID 续传、query 排除、单次摘要委托开关；HTTP/�
 ## 日志依赖联动 — 2026-11-12
 
 开发验证使用 GOWORK=off 与 go.mod 的显式本地 replace；执行完整测试、全量基准（benchtime=100ms），API 用 go doc 与导出源码交叉核对。结果记录在 /tmp/apigo-discover-integration-*.txt。
+
+最终依赖回归：使用修复了并发字典和跨分割跟随的本地 log；调用方诊断 logger 固定绑定相同 RequestID。
